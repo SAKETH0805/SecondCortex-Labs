@@ -61,4 +61,8 @@ skills-lock.json
 # ── Docs (Local Only) ───────────────────────────────────────
 docs/
 project_log.txt
+git_log.txt
+backend_logs/
+frontend_html.txt
+
 

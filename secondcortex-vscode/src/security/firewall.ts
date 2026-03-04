@@ -2,27 +2,29 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { minimatch } from 'minimatch';
+import * as ts from 'typescript'; // The AST Engine
 
 /**
  * SemanticFirewall – the local security layer that ensures NO secrets
  * or proprietary code leave the developer's laptop.
  *
- * Two mechanisms:
+ * Three-layered defense:
  *   1. `.cortexignore` parser — drops events for ignored paths entirely.
- *   2. Regex/AST Scrubber   — hunts for secrets in captured content and
- *      replaces them with `[CODE_REDACTED]`.
+ *   2. AST Scrubber           — uses the TypeScript Compiler API to
+ *      structurally identify secrets by variable/property names and
+ *      surgically redact their values.
+ *   3. Regex Fallback         — catches hardcoded patterns (API keys,
+ *      JWTs, etc.) that the AST layer might miss.
  */
 export class SemanticFirewall {
     private ignorePatterns: string[] = [];
 
-    /** Regex patterns that identify common secrets */
+    /** Fallback Regex for hardcoded secrets not caught by variable names */
     private static readonly SECRET_PATTERNS: RegExp[] = [
-        // API keys with common prefixes
+        // API keys with common prefixes (Stripe, etc.)
         /(?:sk_live_|sk_test_|pk_live_|pk_test_)[A-Za-z0-9]{10,}/g,
         // Bearer tokens
         /Bearer\s+[A-Za-z0-9\-._~+\/]+=*/g,
-        // Generic API key patterns  key = "..." or key: "..."
-        /(?:api[_-]?key|apikey|secret|token|password|passwd|credential|auth)\s*[:=]\s*["'][^"']{8,}["']/gi,
         // AWS keys
         /AKIA[0-9A-Z]{16}/g,
         // Azure connection strings
@@ -41,6 +43,76 @@ export class SemanticFirewall {
 
     constructor(private output: vscode.OutputChannel) {
         this.loadCortexIgnore();
+    }
+
+    // ── AST Scrubber (The "Smart" Firewall) ──────────────────────────
+
+    /**
+     * Parses raw content into a TypeScript AST and walks the tree looking
+     * for string literals assigned to variables or properties whose names
+     * semantically imply a secret (key, token, password, etc.).
+     *
+     * This is smarter than regex because it understands code *structure*:
+     *   const myCustomToken = "xyz123";   // ← regex misses, AST catches
+     *   { authToken: "s3cr3t" }           // ← regex misses, AST catches
+     */
+    private astScrub(rawContent: string): { sanitized: string; count: number } {
+        // 1. Parse the raw text into an Abstract Syntax Tree
+        const sourceFile = ts.createSourceFile(
+            'snapshot.ts',
+            rawContent,
+            ts.ScriptTarget.Latest,
+            true
+        );
+
+        const replacements: { start: number; end: number; text: string }[] = [];
+
+        // Semantic keywords that imply a secret is being stored
+        const sensitiveNames = /key|token|secret|password|passwd|credential|auth/i;
+
+        // 2. Traverse the AST nodes recursively
+        const visit = (node: ts.Node) => {
+            // We only care about String Literals (the actual secret values)
+            if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+                let isSensitive = false;
+
+                // Scenario A: Variable Declaration (e.g., const stripeKey = "...")
+                if (node.parent && ts.isVariableDeclaration(node.parent)) {
+                    const varName = node.parent.name.getText();
+                    if (sensitiveNames.test(varName)) {
+                        isSensitive = true;
+                    }
+                }
+                // Scenario B: Object Property Assignment (e.g., { authToken: "..." })
+                else if (node.parent && ts.isPropertyAssignment(node.parent)) {
+                    const propName = node.parent.name.getText();
+                    if (sensitiveNames.test(propName)) {
+                        isSensitive = true;
+                    }
+                }
+
+                // If structurally identified as a secret, mark the node for redaction
+                if (isSensitive) {
+                    replacements.push({
+                        start: node.getStart(),
+                        end: node.getEnd(),
+                        text: '"[CODE_REDACTED]"'
+                    });
+                }
+            }
+            ts.forEachChild(node, visit);
+        };
+
+        visit(sourceFile);
+
+        // 3. Apply replacements back-to-front to avoid index shifting
+        replacements.sort((a, b) => b.start - a.start);
+        let result = rawContent;
+        for (const rep of replacements) {
+            result = result.slice(0, rep.start) + rep.text + result.slice(rep.end);
+        }
+
+        return { sanitized: result, count: replacements.length };
     }
 
     // ── .cortexignore ─────────────────────────────────────────────
@@ -66,18 +138,32 @@ export class SemanticFirewall {
         return false;
     }
 
-    // ── Regex/AST Scrubber ────────────────────────────────────────
+    // ── The Main Scrub Pipeline ──────────────────────────────────────
 
     /**
-     * Scrubs the raw file content, replacing any detected secrets
-     * with `[CODE_REDACTED]`. Returns the sanitized "Shadow Graph" string.
+     * Runs the AST Parser first (smart, structural), then falls back
+     * to Regex (pattern-based safety net).
+     *
+     * Returns the sanitized "Shadow Graph" string.
      */
     scrub(rawContent: string): string {
-        let sanitized = rawContent;
         let redactionCount = 0;
 
+        // Phase 1: AST Structural Scrubbing
+        try {
+            const astResult = this.astScrub(rawContent);
+            rawContent = astResult.sanitized;
+            redactionCount += astResult.count;
+        } catch (err) {
+            // If AST parsing fails (e.g., non-TS/JS content), silently skip
+            this.output.appendLine(
+                `[SemanticFirewall] AST parse skipped (non-parseable content): ${err}`
+            );
+        }
+
+        // Phase 2: Fallback Regex Scrubbing
+        let sanitized = rawContent;
         for (const pattern of SemanticFirewall.SECRET_PATTERNS) {
-            // Clone the regex to reset lastIndex for global regexes
             const regex = new RegExp(pattern.source, pattern.flags);
             const matches = sanitized.match(regex);
             if (matches) {
@@ -88,7 +174,7 @@ export class SemanticFirewall {
 
         if (redactionCount > 0) {
             this.output.appendLine(
-                `[SemanticFirewall] 🔒 Redacted ${redactionCount} potential secret(s).`
+                `[SemanticFirewall] 🔒 Redacted ${redactionCount} potential secret(s) using AST & Regex.`
             );
         }
 
