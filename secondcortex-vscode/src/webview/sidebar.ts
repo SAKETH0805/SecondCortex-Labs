@@ -64,11 +64,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     this.postMessage({ type: 'loading' });
 
                     const response = await this.backend.askQuestion(question);
-                    if (response) {
+                    if (response && !(response as any)._error) {
                         this.postMessage({
                             type: 'answer',
                             summary: response.summary,
                             commands: response.commands ?? [],
+                        });
+                    } else if (response && (response as any)._error) {
+                        this.postMessage({
+                            type: 'error',
+                            message: `Backend error: ${response.summary}`,
                         });
                     } else {
                         this.postMessage({

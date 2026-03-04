@@ -14,6 +14,7 @@ Endpoints:
 import logging
 import sys
 import os
+from datetime import datetime
 
 # ── Force Python to see the local directories (fixes Azure ModuleNotFoundError) ──────────
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -27,6 +28,8 @@ except ImportError:
     pass
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+import traceback
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -69,6 +72,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    err_msg = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    logger.error("GLOBAL EXCEPTION: %s", err_msg)
+    
+    # Attempt to write to a visible place in persistence if possible
+    try:
+        with open("/home/backend_error.log", "a") as f:
+            f.write(f"\n--- {datetime.now()} ---\n")
+            f.write(err_msg)
+            f.write("\n")
+    except:
+        pass
+        
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "traceback": err_msg if settings.host == "0.0.0.0" else "hidden"},
+    )
 
 # ── Include auth routes ─────────────────────────────────────────
 app.include_router(auth_router)
@@ -170,16 +193,23 @@ async def handle_query(
     """
     Handle a user question — runs the Planner → Executor pipeline.
     """
-    logger.info("Query received: %s (user=%s)", request.question, user_id)
+    try:
+        logger.info("Query received: %s (user=%s)", request.question, user_id)
 
-    # Step 1: Plan — break the question into search tasks
-    plan_result = await planner.plan(request.question, user_id=user_id)
+        # Step 1: Plan — break the question into search tasks
+        plan_result = await planner.plan(request.question, user_id=user_id)
 
-    # Step 2: Execute — synthesize and validate
-    response = await executor.synthesize(request.question, plan_result)
+        # Step 2: Execute — synthesize and validate
+        response = await executor.synthesize(request.question, plan_result)
 
-    logger.info("Query answered: %s", response.summary[:100])
-    return response
+        logger.info("Query answered: %s", response.summary[:100])
+        return response
+    except Exception as exc:
+        import traceback
+        err = traceback.format_exc()
+        logger.error("QUERY PIPELINE CRASH: %s\n%s", exc, err)
+        raise HTTPException(status_code=500, detail=f"Query pipeline error: {str(exc)}")
+
 
 
 @app.post("/api/v1/resurrect", response_model=ResurrectionResponse)

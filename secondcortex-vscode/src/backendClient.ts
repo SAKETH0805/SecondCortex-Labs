@@ -80,22 +80,37 @@ export class BackendClient {
      */
     async askQuestion(question: string): Promise<{ summary: string; commands?: unknown[] } | null> {
         try {
-            const res = await fetch(`${this.baseUrl}/api/v1/query`, {
+            const url = `${this.baseUrl}/api/v1/query`;
+            this.output.appendLine(`[BackendClient] POST ${url}`);
+
+            const res = await fetch(url, {
                 method: 'POST',
                 headers: await this.getHeaders(),
                 body: JSON.stringify({ question }),
             });
+
             if (res.status === 401) {
                 await this.handle401();
                 return null;
             }
             if (!res.ok) {
-                this.output.appendLine(`[BackendClient] Query failed: ${res.status}`);
-                return null;
+                const text = await res.text().catch(() => 'No response body');
+                this.output.appendLine(`[BackendClient] Query failed: ${res.status} ${res.statusText}`);
+                this.output.appendLine(`[BackendClient] Error details: ${text}`);
+                // Parse the error detail if possible
+                let errorMsg = `Backend error (${res.status})`;
+                try {
+                    const errJson = JSON.parse(text);
+                    if (errJson.detail) { errorMsg = errJson.detail; }
+                } catch { /* not JSON */ }
+                return { summary: errorMsg, commands: [], _error: true } as any;
             }
             return (await res.json()) as { summary: string; commands?: unknown[] };
-        } catch (err) {
-            this.output.appendLine(`[BackendClient] Network error querying backend: ${err}`);
+        } catch (err: any) {
+            this.output.appendLine(`[BackendClient] Network error querying backend: ${err.message || err}`);
+            if (err.stack) {
+                this.output.appendLine(`[BackendClient] Stack: ${err.stack}`);
+            }
             return null;
         }
     }

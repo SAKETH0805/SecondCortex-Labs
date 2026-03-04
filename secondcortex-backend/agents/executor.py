@@ -123,16 +123,19 @@ class ExecutorAgent:
         if discrepancies:
             reasoning_log.append(f"⚠️ Discrepancies flagged: {discrepancies}")
 
-        commands = [
-            ResurrectionCommand(**cmd)
-            for cmd in draft.get("commands", [])
-        ]
+        commands = []
+        for cmd in draft.get("commands", []):
+            try:
+                commands.append(ResurrectionCommand(**cmd))
+            except Exception as cmd_exc:
+                logger.warning("Skipping malformed command %s: %s", cmd, cmd_exc)
 
         return QueryResponse(
             summary=draft.get("summary", "I could not determine a clear answer."),
             reasoning_log=reasoning_log,
             commands=commands,
         )
+
 
     async def _generate_draft(self, question: str, context: str) -> dict:
         """Call LLM to draft the answer."""
