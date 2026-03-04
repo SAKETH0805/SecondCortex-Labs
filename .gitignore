@@ -52,6 +52,7 @@ dist/
 azure-logs/
 backend_deploy.zip*
 backend_v2.zip*
+chroma_db/
 
 # ── Agent System ────────────────────────────────────────────
 .agent/

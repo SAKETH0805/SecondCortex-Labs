@@ -60,7 +60,8 @@ class RetrieverAgent:
 
     def __init__(self, vector_db: VectorDBService) -> None:
         self.vector_db = vector_db
-        self._previous_snapshot: StoredSnapshot | None = None
+        # Per-user previous snapshot to avoid cross-user contamination
+        self._previous_snapshots: dict[str, StoredSnapshot] = {}
 
         # Initialize LLM client (GitHub Models or Azure OpenAI)
         self.client = create_llm_client()
@@ -74,7 +75,9 @@ class RetrieverAgent:
         logger.info("Processing snapshot for %s (user=%s)", payload.active_file, user_id or "default")
 
         # ── Step 1: Route the memory operation ──────────────────
-        metadata = await self._route_operation(payload)
+        user_key = user_id or "__anonymous__"
+        previous = self._previous_snapshots.get(user_key)
+        metadata = await self._route_operation(payload, previous)
         logger.info("Operation: %s | Summary: %s", metadata.operation, metadata.summary)
 
         # ── Step 2: Build the stored record ─────────────────────
@@ -101,20 +104,20 @@ class RetrieverAgent:
         elif metadata.operation == MemoryOperation.DELETE:
             logger.info("Snapshot marked as rabbit hole — not storing.")
 
-        # Remember the latest snapshot for comparison
-        self._previous_snapshot = stored
+        # Remember the latest snapshot for this user
+        self._previous_snapshots[user_key] = stored
         return stored
 
-    async def _route_operation(self, payload: SnapshotPayload) -> MemoryMetadata:
+    async def _route_operation(self, payload: SnapshotPayload, previous: StoredSnapshot | None = None) -> MemoryMetadata:
         """Call GPT-4o to decide the memory operation."""
         previous_context = ""
-        if self._previous_snapshot:
+        if previous:
             previous_context = (
                 f"Previous snapshot:\n"
-                f"  File: {self._previous_snapshot.active_file}\n"
-                f"  Branch: {self._previous_snapshot.git_branch}\n"
-                f"  Summary: {self._previous_snapshot.metadata.summary if self._previous_snapshot.metadata else 'N/A'}\n"
-                f"  Shadow Graph (truncated): {self._previous_snapshot.shadow_graph[:500]}\n"
+                f"  File: {previous.active_file}\n"
+                f"  Branch: {previous.git_branch}\n"
+                f"  Summary: {previous.metadata.summary if previous.metadata else 'N/A'}\n"
+                f"  Shadow Graph (truncated): {previous.shadow_graph[:500]}\n"
             )
 
         user_message = (

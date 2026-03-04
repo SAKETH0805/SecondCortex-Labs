@@ -42,4 +42,3 @@ jobs:
           tags: ${{ env.FRONTEND_IMAGE }}:latest
           build-args: |
             NEXT_PUBLIC_BACKEND_URL=https://sc-backend-suhaan.azurewebsites.net
-            NEXT_PUBLIC_API_KEY=sc-key-suhaan-2026

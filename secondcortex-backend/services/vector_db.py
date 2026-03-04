@@ -129,3 +129,37 @@ class VectorDBService:
         except Exception as exc:
             logger.error("Semantic search failed: %s", exc)
             return []
+
+    async def get_recent_snapshots(self, limit: int = 10, user_id: str | None = None) -> list[dict]:
+        """Fetch the most recent snapshots using direct retrieval (not vector search).
+        
+        This is used by the /api/v1/events endpoint for the live graph.
+        Unlike semantic_search, this doesn't require an embedding query.
+        """
+        collection = self._get_collection(user_id)
+        if collection is None:
+            logger.warning("Chroma collection not available — returning empty results.")
+            return []
+
+        try:
+            # Use .get() for direct retrieval (no embedding needed)
+            results = collection.get(
+                limit=limit,
+                include=["metadatas", "documents"]
+            )
+
+            if results and results.get("metadatas"):
+                # Sort by timestamp descending (most recent first)
+                metadatas = results["metadatas"]
+                sorted_metas = sorted(
+                    metadatas,
+                    key=lambda m: m.get("timestamp", ""),
+                    reverse=True
+                )
+                return [dict(meta) for meta in sorted_metas[:limit]]
+
+            return []
+
+        except Exception as exc:
+            logger.error("get_recent_snapshots failed: %s", exc)
+            return []

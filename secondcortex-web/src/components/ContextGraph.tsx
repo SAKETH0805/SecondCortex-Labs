@@ -87,7 +87,7 @@ interface ContextGraphProps {
 export default function ContextGraph({
     backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://sc-backend-suhaan.azurewebsites.net',
     pollIntervalMs = 3000,
-    apiKey = process.env.NEXT_PUBLIC_API_KEY || '',
+    apiKey = '',
 }: ContextGraphProps) {
     const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);

@@ -1,4 +1,4 @@
-import ContextGraph from '@/components/ContextGraph';
+import AuthGate from '@/components/AuthGate';
 
 export const metadata = {
   title: 'SecondCortex — Live Context Graph',
@@ -8,7 +8,7 @@ export const metadata = {
 export default function Home() {
   return (
     <main>
-      <ContextGraph />
+      <AuthGate />
     </main>
   );
 }

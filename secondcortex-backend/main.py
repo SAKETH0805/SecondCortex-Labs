@@ -57,7 +57,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Lock down in production
+    allow_origins=[
+        "https://sc-frontend-suhaan.azurewebsites.net",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -128,7 +131,7 @@ async def get_events(user_id: str | None = Depends(get_current_user)):
     Endpoint for the Next.js React Flow to poll recent snapshots.
     Scoped to the authenticated user's collection.
     """
-    results = await vector_db.semantic_search("*", top_k=10, user_id=user_id)
+    results = await vector_db.get_recent_snapshots(limit=10, user_id=user_id)
 
     events = []
     for r in results:

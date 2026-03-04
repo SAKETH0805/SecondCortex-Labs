@@ -12,11 +12,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build-time env: backend URL and API key (overridable via docker build args)
+# Build-time env: backend URL only (API key is entered by user at login, never baked)
 ARG NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
-ARG NEXT_PUBLIC_API_KEY=
 ENV NEXT_PUBLIC_BACKEND_URL=$NEXT_PUBLIC_BACKEND_URL
-ENV NEXT_PUBLIC_API_KEY=$NEXT_PUBLIC_API_KEY
 
 RUN npm run build
 

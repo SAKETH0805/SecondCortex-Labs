@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { Debouncer } from './debouncer';
 import { SemanticFirewall } from '../security/firewall';
 import { SnapshotCache } from './snapshotCache';
@@ -102,10 +103,16 @@ export class EventCapture {
         const sanitized = this.firewall.scrub(rawContent);
 
         // ── Build the snapshot payload ────────────────────────────
+        // Send workspace-relative path (never absolute — prevents leaking username/OS info)
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+        const relativePath = workspaceRoot
+            ? path.relative(workspaceRoot, doc.uri.fsPath).replace(/\\/g, '/')
+            : path.basename(doc.uri.fsPath);
+
         const snapshot: CapturedSnapshot = {
             timestamp: new Date().toISOString(),
             workspaceFolder: vscode.workspace.workspaceFolders?.[0]?.name ?? 'unknown',
-            activeFile: doc.uri.fsPath,
+            activeFile: relativePath,
             languageId: doc.languageId,
             shadowGraph: sanitized,
             gitBranch: await this.getCurrentGitBranch(),
