@@ -1,25 +1,51 @@
 import * as vscode from 'vscode';
+import { AuthService } from './auth/authService';
 
 /**
- * BackendClient – HTTP client for communicating with the SecondCortex Azure FastAPI backend.
- * Sends an X-API-Key header for per-user authentication.
+ * BackendClient – HTTP client for communicating with the SecondCortex FastAPI backend.
+ * Sends an Authorization: Bearer <JWT> header for per-user authentication.
  */
 export class BackendClient {
+    private auth?: AuthService;
+
     constructor(
         private baseUrl: string,
         private output: vscode.OutputChannel
     ) { }
 
-    /** Build common headers including the API key if configured. */
-    private getHeaders(): Record<string, string> {
+    /** Attach the AuthService instance (set after construction). */
+    setAuthService(auth: AuthService): void {
+        this.auth = auth;
+    }
+
+    /** Build common headers including the JWT Bearer token. */
+    private async getHeaders(): Promise<Record<string, string>> {
         const headers: Record<string, string> = {
             'Content-Type': 'application/json',
         };
-        const apiKey = vscode.workspace.getConfiguration('secondcortex').get<string>('apiKey');
-        if (apiKey) {
-            headers['X-API-Key'] = apiKey;
+        if (this.auth) {
+            const token = await this.auth.getToken();
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
         }
         return headers;
+    }
+
+    /** Handle 401 responses by prompting re-login. */
+    private async handle401(): Promise<void> {
+        this.output.appendLine('[BackendClient] 401 Unauthorized — token expired or invalid.');
+        if (this.auth) {
+            await this.auth.clearToken();
+        }
+        vscode.window.showWarningMessage(
+            'SecondCortex session expired. Please log in again.',
+            'Log In'
+        ).then((choice) => {
+            if (choice === 'Log In') {
+                vscode.commands.executeCommand('secondcortex.login');
+            }
+        });
     }
 
     /**
@@ -30,9 +56,13 @@ export class BackendClient {
         try {
             const res = await fetch(`${this.baseUrl}/api/v1/snapshot`, {
                 method: 'POST',
-                headers: this.getHeaders(),
+                headers: await this.getHeaders(),
                 body: JSON.stringify(payload),
             });
+            if (res.status === 401) {
+                await this.handle401();
+                return false;
+            }
             if (!res.ok) {
                 this.output.appendLine(`[BackendClient] Snapshot upload failed: ${res.status} ${res.statusText}`);
                 return false;
@@ -52,9 +82,13 @@ export class BackendClient {
         try {
             const res = await fetch(`${this.baseUrl}/api/v1/query`, {
                 method: 'POST',
-                headers: this.getHeaders(),
+                headers: await this.getHeaders(),
                 body: JSON.stringify({ question }),
             });
+            if (res.status === 401) {
+                await this.handle401();
+                return null;
+            }
             if (!res.ok) {
                 this.output.appendLine(`[BackendClient] Query failed: ${res.status}`);
                 return null;
@@ -73,9 +107,13 @@ export class BackendClient {
         try {
             const res = await fetch(`${this.baseUrl}/api/v1/resurrect`, {
                 method: 'POST',
-                headers: this.getHeaders(),
+                headers: await this.getHeaders(),
                 body: JSON.stringify({ target }),
             });
+            if (res.status === 401) {
+                await this.handle401();
+                return null;
+            }
             if (!res.ok) {
                 this.output.appendLine(`[BackendClient] Resurrection request failed: ${res.status}`);
                 return null;

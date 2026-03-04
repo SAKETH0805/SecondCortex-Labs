@@ -45,6 +45,14 @@
       {
         "command": "secondcortex.toggleCapture",
         "title": "SecondCortex: Toggle Context Capture"
+      },
+      {
+        "command": "secondcortex.login",
+        "title": "SecondCortex: Log In"
+      },
+      {
+        "command": "secondcortex.logout",
+        "title": "SecondCortex: Log Out"
       }
     ],
     "configuration": {
@@ -69,11 +77,6 @@
           "type": "boolean",
           "default": true,
           "description": "Enable or disable automatic context capture."
-        },
-        "secondcortex.apiKey": {
-          "type": "string",
-          "default": "",
-          "description": "Your personal SecondCortex API key for backend authentication."
         }
       }
     }

@@ -6,6 +6,7 @@ import { SemanticFirewall } from './security/firewall';
 import { WorkspaceResurrector } from './executor/workspace';
 import { SidebarProvider } from './webview/sidebar';
 import { BackendClient } from './backendClient';
+import { AuthService } from './auth/authService';
 
 let eventCapture: EventCapture | undefined;
 let snapshotCache: SnapshotCache | undefined;
@@ -20,8 +21,13 @@ export function activate(context: vscode.ExtensionContext) {
     const debouncerDelayMs = config.get<number>('debouncerDelayMs', 30000);
     const noiseThresholdMs = config.get<number>('noiseThresholdMs', 10000);
 
+    // ── Auth ───────────────────────────────────────────────────────
+    const authService = new AuthService(context.secrets, outputChannel, backendUrl);
+
     // ── Services ───────────────────────────────────────────────────
     const backendClient = new BackendClient(backendUrl, outputChannel);
+    backendClient.setAuthService(authService);
+
     const firewall = new SemanticFirewall(outputChannel);
     const debouncer = new Debouncer(debouncerDelayMs, noiseThresholdMs);
     snapshotCache = new SnapshotCache(context.globalStorageUri.fsPath, outputChannel);
@@ -32,12 +38,27 @@ export function activate(context: vscode.ExtensionContext) {
     eventCapture.register(context);
 
     // ── Webview Sidebar ────────────────────────────────────────────
-    const sidebarProvider = new SidebarProvider(context.extensionUri, backendClient, outputChannel);
+    const sidebarProvider = new SidebarProvider(context.extensionUri, backendClient, authService, outputChannel);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('secondcortex.chatView', sidebarProvider)
     );
 
     // ── Commands ───────────────────────────────────────────────────
+    context.subscriptions.push(
+        vscode.commands.registerCommand('secondcortex.login', async () => {
+            // The sidebar will handle the actual login UI
+            vscode.commands.executeCommand('secondcortex.chatView.focus');
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('secondcortex.logout', async () => {
+            await authService.logout();
+            sidebarProvider.refreshView();
+            vscode.window.showInformationMessage('SecondCortex: Logged out successfully.');
+        })
+    );
+
     context.subscriptions.push(
         vscode.commands.registerCommand('secondcortex.resurrectWorkspace', async () => {
             const answer = await vscode.window.showInputBox({
@@ -73,7 +94,6 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     // ── Offline Sync ───────────────────────────────────────────────
-    // On startup, attempt to flush any cached offline snapshots
     snapshotCache.flushToBackend(backendClient).catch((err) => {
         outputChannel.appendLine(`[SecondCortex] Offline sync error: ${err}`);
     });
