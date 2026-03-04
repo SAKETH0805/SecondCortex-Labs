@@ -104,7 +104,7 @@ class PlannerAgent:
         except Exception as exc:
             logger.error("Planner LLM call failed. Model: %s, Endpoint: %s. Error: %s",
                          get_chat_model(), settings.github_models_endpoint, exc, exc_info=True)
-            return {"intent": question, "search_queries": [question], "temporal_scope": "all_time"}
+            return {"intent": f"Planner Error: {str(exc)}", "search_queries": [question], "temporal_scope": "all_time"}
 
 
 class PlanResult:

@@ -154,7 +154,7 @@ class ExecutorAgent:
             return json.loads(raw)
         except Exception as exc:
             logger.error("Executor LLM draft call failed. Error: %s", exc, exc_info=True)
-            return {"summary": "Error generating answer.", "confidence": 0.0}
+            return {"summary": f"Error generating answer: {str(exc)}", "confidence": 0.0}
 
     async def _validate_draft(self, question: str, draft: dict, context: str) -> dict:
         """Internal Validation Loop — checks draft against the evidence."""
