@@ -43,3 +43,26 @@ def get_embedding_model() -> str:
     if settings.llm_provider == "github_models":
         return settings.github_models_embedding_model
     return settings.azure_openai_embedding_deployment
+
+
+# ── Gemini (used by Retriever for high-volume snapshot processing) ──
+
+def create_gemini_client() -> OpenAI:
+    """Return an OpenAI-compatible client pointed at the Gemini API."""
+    key_status = "present" if settings.gemini_api_key else "MISSING"
+    logger.info("Creating Gemini client (model: %s). API Key: %s",
+                settings.gemini_model, key_status)
+    return OpenAI(
+        base_url=settings.gemini_endpoint,
+        api_key=settings.gemini_api_key,
+    )
+
+
+def get_gemini_model() -> str:
+    """Return the Gemini chat model name."""
+    return settings.gemini_model
+
+
+def get_gemini_embedding_model() -> str:
+    """Return the Gemini embedding model name."""
+    return settings.gemini_embedding_model

@@ -27,7 +27,7 @@ from models.schemas import (
     StoredSnapshot,
 )
 from services.vector_db import VectorDBService
-from services.llm_client import create_llm_client, get_chat_model
+from services.llm_client import create_gemini_client, get_gemini_model
 
 logger = logging.getLogger("secondcortex.retriever")
 
@@ -64,7 +64,7 @@ class RetrieverAgent:
         self._previous_snapshots: dict[str, StoredSnapshot] = {}
 
         # Initialize LLM client (GitHub Models or Azure OpenAI)
-        self.client = create_llm_client()
+        self.client = create_gemini_client()
 
     async def process_snapshot(self, payload: SnapshotPayload, user_id: str | None = None) -> StoredSnapshot:
         """
@@ -132,14 +132,13 @@ class RetrieverAgent:
 
         try:
             response = self.client.chat.completions.create(
-                model=get_chat_model(),
+                model=get_gemini_model(),
                 messages=[
                     {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
                     {"role": "user", "content": user_message},
                 ],
                 temperature=0.1,
                 max_tokens=600,
-                response_format={"type": "json_object"},
             )
 
             raw = response.choices[0].message.content or "{}"
