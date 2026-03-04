@@ -16,7 +16,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // ── Configuration ──────────────────────────────────────────────
     const config = vscode.workspace.getConfiguration('secondcortex');
-    const backendUrl = config.get<string>('backendUrl', 'http://localhost:8000');
+    const backendUrl = config.get<string>('backendUrl', 'https://sc-backend-suhaan.azurewebsites.net');
     const debouncerDelayMs = config.get<number>('debouncerDelayMs', 30000);
     const noiseThresholdMs = config.get<number>('noiseThresholdMs', 10000);
 

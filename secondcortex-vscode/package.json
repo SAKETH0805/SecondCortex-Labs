@@ -52,7 +52,7 @@
       "properties": {
         "secondcortex.backendUrl": {
           "type": "string",
-          "default": "http://localhost:8000",
+          "default": "https://sc-backend-suhaan.azurewebsites.net",
           "description": "The URL of the SecondCortex Azure backend API."
         },
         "secondcortex.debouncerDelayMs": {
