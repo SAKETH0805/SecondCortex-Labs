@@ -101,8 +101,8 @@ class PlannerAgent:
             raw = response.choices[0].message.content or "{}"
             return json.loads(raw)
         except Exception as exc:
-            logger.error("Planner LLM call failed. Model: %s, Endpoint: %s. Error: %s",
-                         get_chat_model(), settings.github_models_endpoint, exc, exc_info=True)
+            logger.error("LLM Error during plan generation model=%s endpoint=%s",
+                         get_gemini_model(), settings.gemini_endpoint, exc, exc_info=True)
             return {"intent": f"Planner Error: {str(exc)}", "search_queries": [question], "temporal_scope": "all_time"}
 
 
