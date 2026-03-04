@@ -173,7 +173,8 @@ export default function ContextGraph({
                     hasNew = true;
 
                     // 1. File Node (Deduplicated)
-                    const fileName = event.active_file.split(/[/\\]/).pop() ?? event.active_file;
+                    const activeFile = event.active_file || 'unknown';
+                    const fileName = activeFile.split(/[/\\]/).pop() ?? activeFile;
                     const fileNodeId = `file-${fileName}`;
                     if (!nodeMap.has(fileNodeId)) {
                         const fileNode: Node = {
@@ -253,7 +254,7 @@ export default function ContextGraph({
                         });
                     }
 
-                    setLastEvent(`${new Date().toLocaleTimeString()} — ${event.summary || fileName}`);
+                    setLastEvent(`${new Date().toLocaleTimeString()} — ${event.summary || (event.active_file ? (event.active_file.split(/[/\\]/).pop()) : 'Activity')}`);
                 });
 
                 if (hasNew) {

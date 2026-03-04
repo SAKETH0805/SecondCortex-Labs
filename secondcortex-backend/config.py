@@ -26,10 +26,6 @@ class Settings(BaseSettings):
     azure_openai_api_version: str = "2024-02-01"
     azure_openai_embedding_deployment: str = "text-embedding-ada-002"
 
-    # ── Azure AI Search ──────────────────────────────────────
-    azure_search_endpoint: str = ""
-    azure_search_api_key: str = ""
-    azure_search_index_name: str = "secondcortex-snapshots"
 
     # ── Server ───────────────────────────────────────────────
     host: str = "0.0.0.0"

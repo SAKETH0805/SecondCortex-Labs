@@ -16,6 +16,14 @@ import os
 # ── Force Python to see the local directories (fixes Azure ModuleNotFoundError) ──────────
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# ── ChromaDB Compatibility Patch for Azure (Older SQLite3) ────────────────────────────────
+try:
+    __import__('pysqlite3')
+    import sys
+    sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+except ImportError:
+    pass
+
 from fastapi import BackgroundTasks, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
