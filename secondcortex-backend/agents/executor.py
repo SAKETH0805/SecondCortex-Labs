@@ -16,7 +16,7 @@ import logging
 
 from agents.planner import PlanResult
 from models.schemas import QueryResponse, ResurrectionCommand
-from services.llm_client import create_llm_client, get_chat_model
+from services.llm_client import create_gemini_client, get_gemini_model
 
 logger = logging.getLogger("secondcortex.executor")
 
@@ -72,7 +72,7 @@ class ExecutorAgent:
     """Synthesizes answers and validates them internally."""
 
     def __init__(self) -> None:
-        self.client = create_llm_client()
+        self.client = create_gemini_client()
 
     async def synthesize(self, question: str, plan_result: PlanResult) -> QueryResponse:
         """
@@ -141,14 +141,13 @@ class ExecutorAgent:
         """Call LLM to draft the answer."""
         try:
             response = self.client.chat.completions.create(
-                model=get_chat_model(),
+                model=get_gemini_model(),
                 messages=[
                     {"role": "system", "content": EXECUTOR_SYSTEM_PROMPT},
                     {"role": "user", "content": f"Question: {question}\n\nRetrieved Context:\n{context}"},
                 ],
                 temperature=0.3,
                 max_tokens=1200,
-                response_format={"type": "json_object"},
             )
             raw = response.choices[0].message.content or "{}"
             return json.loads(raw)
@@ -160,7 +159,7 @@ class ExecutorAgent:
         """Internal Validation Loop — checks draft against the evidence."""
         try:
             response = self.client.chat.completions.create(
-                model=get_chat_model(),
+                model=get_gemini_model(),
                 messages=[
                     {"role": "system", "content": VALIDATION_PROMPT},
                     {
@@ -174,7 +173,6 @@ class ExecutorAgent:
                 ],
                 temperature=0.1,
                 max_tokens=400,
-                response_format={"type": "json_object"},
             )
             raw = response.choices[0].message.content or "{}"
             return json.loads(raw)

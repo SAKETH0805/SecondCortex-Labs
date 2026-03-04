@@ -15,7 +15,7 @@ import logging
 
 from config import settings
 from services.vector_db import VectorDBService
-from services.llm_client import create_llm_client, get_chat_model
+from services.llm_client import create_gemini_client, get_gemini_model
 
 logger = logging.getLogger("secondcortex.planner")
 
@@ -47,7 +47,7 @@ class PlannerAgent:
 
     def __init__(self, vector_db: VectorDBService) -> None:
         self.vector_db = vector_db
-        self.client = create_llm_client()
+        self.client = create_gemini_client()
 
     async def plan(self, question: str, user_id: str | None = None) -> PlanResult:
         """
@@ -90,14 +90,13 @@ class PlannerAgent:
         """Call GPT-4o to decompose the question into search tasks."""
         try:
             response = self.client.chat.completions.create(
-                model=get_chat_model(),
+                model=get_gemini_model(),
                 messages=[
                     {"role": "system", "content": PLANNER_SYSTEM_PROMPT},
                     {"role": "user", "content": question},
                 ],
                 temperature=0.2,
                 max_tokens=400,
-                response_format={"type": "json_object"},
             )
             raw = response.choices[0].message.content or "{}"
             return json.loads(raw)
