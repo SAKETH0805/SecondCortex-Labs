@@ -3,7 +3,7 @@ FROM python:3.12-slim AS base
 
 WORKDIR /app
 
-# Install system deps for azure-search-documents (requires gcc for some wheels)
+# Install system deps for chromadb (requires gcc for some wheels)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libffi-dev && \
     rm -rf /var/lib/apt/lists/*

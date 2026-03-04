@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 
-from services.azure_integration import AzureIntegrationService
+from services.vector_db import VectorDBService
 from services.llm_client import create_llm_client, get_chat_model
 
 logger = logging.getLogger("secondcortex.planner")
@@ -44,14 +44,14 @@ Rules:
 class PlannerAgent:
     """Intercepts user questions and builds a search plan."""
 
-    def __init__(self, azure_service: AzureIntegrationService) -> None:
-        self.azure_service = azure_service
+    def __init__(self, vector_db: VectorDBService) -> None:
+        self.vector_db = vector_db
         self.client = create_llm_client()
 
     async def plan(self, question: str) -> PlanResult:
         """
         Interpret the user's question and produce a search plan.
-        Returns retrieved context chunks from Azure AI Search.
+        Returns retrieved context chunks from Vector DB.
         """
         logger.info("Planning for question: %s", question)
 
@@ -66,7 +66,7 @@ class PlannerAgent:
 
         for i, query in enumerate(search_queries):
             logger.info("Search step %d/%d: %s", i + 1, MAX_STEPS, query)
-            results = await self.azure_service.semantic_search(query, top_k=5)
+            results = await self.vector_db.semantic_search(query, top_k=5)
             all_results.extend(results)
 
         # Deduplicate by snapshot ID

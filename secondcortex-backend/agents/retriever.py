@@ -26,7 +26,7 @@ from models.schemas import (
     SnapshotPayload,
     StoredSnapshot,
 )
-from services.azure_integration import AzureIntegrationService
+from services.vector_db import VectorDBService
 from services.llm_client import create_llm_client, get_chat_model
 
 logger = logging.getLogger("secondcortex.retriever")
@@ -58,8 +58,8 @@ Rules:
 class RetrieverAgent:
     """Processes IDE snapshots in the background."""
 
-    def __init__(self, azure_service: AzureIntegrationService) -> None:
-        self.azure_service = azure_service
+    def __init__(self, vector_db: VectorDBService) -> None:
+        self.vector_db = vector_db
         self._previous_snapshot: StoredSnapshot | None = None
 
         # Initialize LLM client (GitHub Models or Azure OpenAI)
@@ -92,12 +92,12 @@ class RetrieverAgent:
 
         # ── Step 3: On ADD/UPDATE → embed and store in vector DB
         if metadata.operation in (MemoryOperation.ADD, MemoryOperation.UPDATE):
-            embedding = await self.azure_service.generate_embedding(
+            embedding = await self.vector_db.generate_embedding(
                 f"{metadata.summary}\n{payload.shadow_graph[:2000]}"
             )
             stored.embedding = embedding
-            await self.azure_service.upsert_snapshot(stored)
-            logger.info("Stored snapshot %s in Azure AI Search.", stored.id)
+            await self.vector_db.upsert_snapshot(stored)
+            logger.info("Stored snapshot %s in Vector DB.", stored.id)
         elif metadata.operation == MemoryOperation.DELETE:
             logger.info("Snapshot marked as rabbit hole — not storing.")
 

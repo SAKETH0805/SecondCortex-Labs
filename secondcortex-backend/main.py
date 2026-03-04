@@ -30,7 +30,7 @@ from models.schemas import (
     ResurrectionResponse,
     SnapshotPayload,
 )
-from services.azure_integration import AzureIntegrationService
+from services.vector_db import VectorDBService
 
 # ── Logging setup ───────────────────────────────────────────────
 logging.basicConfig(
@@ -55,9 +55,9 @@ app.add_middleware(
 )
 
 # ── Service & Agent Initialization ──────────────────────────────
-azure_service = AzureIntegrationService()
-retriever = RetrieverAgent(azure_service)
-planner = PlannerAgent(azure_service)
+vector_db = VectorDBService()
+retriever = RetrieverAgent(vector_db)
+planner = PlannerAgent(vector_db)
 executor = ExecutorAgent()
 
 
@@ -87,7 +87,7 @@ async def get_events():
     Fetches the latest context graph events from Azure AI Search.
     """
     # Fetch top 10 recent events using an empty search string (match all)
-    results = await azure_service.semantic_search("*", top_k=10)
+    results = await vector_db.semantic_search("*", top_k=10)
     
     # Map the search payload back into the event format expected by the frontend
     events = []
