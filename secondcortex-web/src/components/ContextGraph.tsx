@@ -81,13 +81,15 @@ const NODE_STYLES: Record<string, React.CSSProperties> = {
 interface ContextGraphProps {
     backendUrl?: string;
     pollIntervalMs?: number;
-    apiKey?: string;
+    token?: string;
+    onUnauthorized?: () => void;
 }
 
 export default function ContextGraph({
     backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://sc-backend-suhaan.azurewebsites.net',
     pollIntervalMs = 3000,
-    apiKey = '',
+    token = '',
+    onUnauthorized,
 }: ContextGraphProps) {
     const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -281,10 +283,17 @@ export default function ContextGraph({
         const poll = async () => {
             try {
                 const headers: Record<string, string> = {};
-                if (apiKey) {
-                    headers['X-API-Key'] = apiKey;
+                if (token) {
+                    headers['Authorization'] = `Bearer ${token}`;
                 }
                 const res = await fetch(`${backendUrl}/api/v1/events`, { headers });
+
+                if (res.status === 401 || res.status === 403) {
+                    setIsConnected(false);
+                    if (onUnauthorized) onUnauthorized();
+                    return;
+                }
+
                 if (res.ok) {
                     setIsConnected(true);
                     const data = await res.json();
@@ -309,7 +318,7 @@ export default function ContextGraph({
             active = false;
             clearInterval(interval);
         };
-    }, [backendUrl, pollIntervalMs, processEvents, apiKey]);
+    }, [backendUrl, pollIntervalMs, processEvents, token, onUnauthorized]);
 
     return (
         <div style={{ width: '100%', height: '100vh', background: '#020617' }}>
