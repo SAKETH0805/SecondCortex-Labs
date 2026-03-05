@@ -59,7 +59,7 @@ logger = logging.getLogger("secondcortex.main")
 app = FastAPI(
     title="SecondCortex API",
     description="Multi-Agent Orchestrator for IDE Context Memory",
-    version="0.3.0",
+    version="0.3.1",
 )
 
 app.add_middleware(
