@@ -66,41 +66,85 @@ class UserDB:
                 )
             """)
             conn.execute("""
+                CREATE TABLE IF NOT EXISTS chat_sessions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS chat_messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id TEXT NOT NULL,
+                    session_id TEXT,
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users (id)
+                    FOREIGN KEY (user_id) REFERENCES users (id),
+                    FOREIGN KEY (session_id) REFERENCES chat_sessions (id)
                 )
             """)
             conn.commit()
 
-    def save_chat_message(self, user_id: str, role: str, content: str) -> None:
-        """Save a chat message (user or assistant) to the database."""
+    def create_chat_session(self, user_id: str, title: str = "New Chat") -> str:
+        """Create a new chat session and return its ID."""
+        session_id = str(uuid.uuid4())
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                "INSERT INTO chat_messages (user_id, role, content) VALUES (?, ?, ?)",
-                (user_id, role, content),
+                "INSERT INTO chat_sessions (id, user_id, title) VALUES (?, ?, ?)",
+                (session_id, user_id, title),
+            )
+            conn.commit()
+        return session_id
+
+    def get_chat_sessions(self, user_id: str) -> list[dict]:
+        """List all chat sessions for a user."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT id, title, created_at FROM chat_sessions WHERE user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            return [{"id": r[0], "title": r[1], "created_at": r[2]} for r in rows]
+
+    def save_chat_message(self, user_id: str, role: str, content: str, session_id: str | None = None) -> None:
+        """Save a chat message to a specific session."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO chat_messages (user_id, session_id, role, content) VALUES (?, ?, ?, ?)",
+                (user_id, session_id, role, content),
             )
             conn.commit()
 
-    def get_chat_history(self, user_id: str, limit: int = 50) -> list[dict]:
-        """Retrieve recent chat history for a user."""
+    def get_chat_history(self, user_id: str, session_id: str | None = None, limit: int = 50) -> list[dict]:
+        """Retrieve chat history, optionally filtered by session."""
+        query = "SELECT role, content, timestamp FROM chat_messages WHERE user_id = ?"
+        params = [user_id]
+        if session_id:
+            query += " AND session_id = ?"
+            params.append(session_id)
+        else:
+            query += " AND session_id IS NULL"
+        
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+
         with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute(
-                "SELECT role, content, timestamp FROM chat_messages WHERE user_id = ? ORDER BY id DESC LIMIT ?",
-                (user_id, limit),
-            )
+            cursor = conn.execute(query, tuple(params))
             rows = cursor.fetchall()
-            # Return in chronological order
             return [{"role": r[0], "content": r[1], "timestamp": r[2]} for r in reversed(rows)]
 
-    def delete_chat_history(self, user_id: str) -> None:
-        """Clear all chat history for a user (New Chat functionality)."""
+    def delete_chat_history(self, user_id: str, session_id: str | None = None) -> None:
+        """Clear chat history (single session or all if none specified)."""
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("DELETE FROM chat_messages WHERE user_id = ?", (user_id,))
+            if session_id:
+                conn.execute("DELETE FROM chat_messages WHERE user_id = ? AND session_id = ?", (user_id, session_id))
+                conn.execute("DELETE FROM chat_sessions WHERE user_id = ? AND id = ?", (user_id, session_id))
+            else:
+                conn.execute("DELETE FROM chat_messages WHERE user_id = ?", (user_id,))
+                conn.execute("DELETE FROM chat_sessions WHERE user_id = ?", (user_id,))
             conn.commit()
 
 

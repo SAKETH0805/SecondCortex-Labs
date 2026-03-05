@@ -27,7 +27,7 @@ try:
 except ImportError:
     pass
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Body
 from fastapi.responses import JSONResponse
 import traceback
 from fastapi.middleware.cors import CORSMiddleware
@@ -189,40 +189,67 @@ async def get_events(user_id: str = Depends(get_current_user)):
 
 
 
-@app.get("/api/v1/chat/history", response_model=ChatHistoryResponse)
-async def get_chat_history(user_id: str = Depends(get_current_user)):
-    """Retrieve persistent chat history for the user."""
-    messages = user_db.get_chat_history(user_id)
-    return ChatHistoryResponse(messages=messages)
+@app.get("/api/v1/chat/history", response_model=schemas.ChatHistoryResponse)
+async def get_chat_history(
+    session_id: str | None = None,
+    user: dict = Depends(auth_service.get_current_user)
+):
+    """Retrieve chat history for the current user, optionally filtered by session."""
+    history = user_db.get_chat_history(user["id"], session_id=session_id)
+    return {"messages": history}
+
+
+@app.get("/api/v1/chat/sessions", response_model=schemas.ChatSessionsResponse)
+async def get_chat_sessions(
+    user: dict = Depends(auth_service.get_current_user)
+):
+    """List all unique chat sessions for the current user."""
+    sessions = user_db.get_chat_sessions(user["id"])
+    return {"sessions": sessions}
 
 
 @app.delete("/api/v1/chat/history")
-async def clear_chat_history(user_id: str = Depends(get_current_user)):
-    """Clear chat history (New Chat)."""
-    user_db.delete_chat_history(user_id)
-    return {"status": "ok", "message": "Chat history cleared."}
+async def clear_chat_history(
+    session_id: str | None = None,
+    user: dict = Depends(auth_service.get_current_user)
+):
+    """Clear chat history (single session or all)."""
+    user_db.delete_chat_history(user["id"], session_id=session_id)
+    return {"message": "History cleared"}
 
 
-@app.post("/api/v1/query", response_model=QueryResponse)
+@app.post("/api/v1/chat/sessions")
+async def create_chat_session(
+    req: dict = Body(...),
+    user: dict = Depends(auth_service.get_current_user)
+):
+    """Create a new chat session for the current user."""
+    session_id = user_db.create_chat_session(user["id"], title=req.get("title", "New Chat"))
+    return {"session_id": session_id}
+
+
+@app.post("/api/v1/query", response_model=schemas.QueryResponse)
 async def handle_query(
-    request: QueryRequest,
-    user_id: str = Depends(get_current_user),
+    req: schemas.QueryRequest,
+    session_id: str | None = None,
+    user: dict = Depends(auth_service.get_current_user)
 ):
     """
-    Handle a user question — runs the Planner → Executor pipeline.
+    Main entry point for SecondCortex queries.
+    Combines retrieval, planning, and execution logic.
     """
     try:
-        logger.info("Query received: %s (user=%s)", request.question, user_id)
+        logger.info("Query received: %s (user=%s, session=%s)", req.question, user["id"], session_id)
 
         # Step 1: Plan — break the question into search tasks
-        plan_result = await planner.plan(request.question, user_id=user_id)
+        plan_result = await planner.plan(req.question, user_id=user["id"])
 
         # Step 2: Execute — synthesize and validate
         response = await executor.synthesize(request.question, plan_result)
 
         # Step 3: Persist history
-        user_db.save_chat_message(user_id, "user", request.question)
-        user_db.save_chat_message(user_id, "assistant", response.summary)
+        user_db.save_chat_message(user["id"], "user", req.question, session_id=session_id)
+        user_db.save_chat_message(user["id"], "assistant", response.summary, session_id=session_id)
 
         logger.info("Query answered: %s", response.summary[:100])
         return response

@@ -105,3 +105,13 @@ class ChatMessage(BaseModel):
 
 class ChatHistoryResponse(BaseModel):
     messages: list[ChatMessage]
+
+
+class ChatSession(BaseModel):
+    id: str
+    title: str
+    created_at: datetime
+
+
+class ChatSessionsResponse(BaseModel):
+    sessions: list[ChatSession]
