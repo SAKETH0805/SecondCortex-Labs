@@ -28,7 +28,7 @@ from models.schemas import (
     StoredSnapshot,
 )
 from services.vector_db import VectorDBService
-from services.llm_client import create_gemini_client, get_gemini_model
+from services.llm_client import create_groq_client, get_groq_model
 from services.rate_limiter import rate_limited_call
 
 logger = logging.getLogger("secondcortex.retriever")
@@ -70,8 +70,8 @@ class RetrieverAgent:
         # Per-user last LLM call timestamp for cooldown
         self._last_llm_call: dict[str, float] = {}
 
-        # Initialize LLM client (GitHub Models or Azure OpenAI)
-        self.client = create_gemini_client()
+        # Initialize LLM client (Groq)
+        self.client = create_groq_client()
 
     async def process_snapshot(self, payload: SnapshotPayload, user_id: str | None = None) -> StoredSnapshot:
         """
@@ -155,7 +155,7 @@ class RetrieverAgent:
         try:
             response = await rate_limited_call(
                 self.client.chat.completions.create,
-                model=get_gemini_model(),
+                model=get_groq_model(),
                 messages=[
                     {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
                     {"role": "user", "content": user_message},

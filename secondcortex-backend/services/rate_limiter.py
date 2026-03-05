@@ -1,5 +1,5 @@
 """
-Global Gemini Rate Limiter — prevents 429 errors by throttling API calls
+Global Groq Rate Limiter — prevents 429 errors by throttling API calls
 and providing retry-with-backoff when rate limits are hit.
 """
 
@@ -15,7 +15,7 @@ logger = logging.getLogger("secondcortex.rate_limiter")
 # ── Simple Token Bucket Rate Limiter ─────────────────────────────
 
 class RateLimiter:
-    """Thread-safe token bucket rate limiter for Gemini API calls."""
+    """Thread-safe token bucket rate limiter for Groq API calls."""
 
     def __init__(self, max_calls_per_minute: int = 12, max_retries: int = 2):
         self.max_calls = max_calls_per_minute
@@ -43,7 +43,6 @@ class RateLimiter:
                         "Waiting %.1fs before next call.",
                         len(self._call_timestamps), self.max_calls, wait_time
                     )
-                    pass # Release lock implicitly when block ends
                     
         # Wait outside the lock so other tasks aren't blocked from checking
         if len(self._call_timestamps) >= self.max_calls and wait_time > 0:
@@ -107,13 +106,13 @@ async def rate_limited_call(func, *args, **kwargs):
                 if attempt < limiter.max_retries:
                     backoff = (attempt + 1) * 5  # 5s, 10s (reduced from 15/30)
                     logger.warning(
-                        "Gemini 429 error (attempt %d/%d). Retrying in %ds...",
+                        "Groq 429 error (attempt %d/%d). Retrying in %ds...",
                         attempt + 1, limiter.max_retries + 1, backoff
                     )
                     await asyncio.sleep(backoff)
                     continue
                 else:
-                    logger.error("Gemini 429 error — all retries exhausted.")
+                    logger.error("Groq 429 error — all retries exhausted.")
                     raise
             else:
                 # Non-rate-limit error — don't retry

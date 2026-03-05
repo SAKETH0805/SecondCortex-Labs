@@ -48,7 +48,7 @@ class PlannerAgent:
 
     def __init__(self, vector_db: VectorDBService) -> None:
         self.vector_db = vector_db
-        self.client = create_gemini_client()
+        self.client = create_groq_client()
 
     async def plan(self, question: str, user_id: str | None = None) -> PlanResult:
         """
@@ -92,7 +92,7 @@ class PlannerAgent:
         try:
             response = await rate_limited_call(
                 self.client.chat.completions.create,
-                model=get_gemini_model(),
+                model=get_groq_model(),
                 messages=[
                     {"role": "system", "content": PLANNER_SYSTEM_PROMPT},
                     {"role": "user", "content": question},
@@ -104,7 +104,7 @@ class PlannerAgent:
             return json.loads(raw)
         except Exception as exc:
             logger.error("LLM Error during plan generation model=%s endpoint=%s",
-                         get_gemini_model(), settings.gemini_endpoint, exc, exc_info=True)
+                         get_groq_model(), settings.groq_endpoint, exc, exc_info=True)
             return {"intent": f"Planner Error: {str(exc)}", "search_queries": [question], "temporal_scope": "all_time"}
 
 

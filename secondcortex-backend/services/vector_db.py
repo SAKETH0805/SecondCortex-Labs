@@ -14,7 +14,7 @@ from typing import Any
 import chromadb
 
 from config import settings
-from services.llm_client import create_llm_client, get_embedding_model, create_gemini_client, get_gemini_embedding_model
+from services.llm_client import create_llm_client, get_embedding_model
 from services.rate_limiter import rate_limited_call
 
 logger = logging.getLogger("secondcortex.vectordb")
@@ -25,7 +25,6 @@ class VectorDBService:
 
     def __init__(self) -> None:
         self.openai_client = create_llm_client()
-        self.gemini_client = create_gemini_client()
 
         # Initialize ChromaDB client with configurable persistent path
         try:
@@ -55,21 +54,14 @@ class VectorDBService:
 
     # ── Embeddings ──────────────────────────────────────────────
 
-    async def generate_embedding(self, text: str, use_gemini: bool = True) -> list[float]:
-        """Generate a text embedding. Uses Gemini by default (free tier), falls back to GPT."""
+    async def generate_embedding(self, text: str) -> list[float]:
+        """Generate a text embedding. Routes through the primary OpenAI/GitHub Models client."""
         try:
-            if use_gemini:
-                response = await rate_limited_call(
-                    self.gemini_client.embeddings.create,
-                    model=get_gemini_embedding_model(),
-                    input=text[:8000],
-                )
-            else:
-                response = await rate_limited_call(
-                    self.openai_client.embeddings.create,
-                    model=get_embedding_model(),
-                    input=text[:8000],
-                )
+            response = await rate_limited_call(
+                self.openai_client.embeddings.create,
+                model=get_embedding_model(),
+                input=text[:8000],
+            )
             return response.data[0].embedding
         except Exception as exc:
             logger.error("Embedding generation failed: %s", exc)

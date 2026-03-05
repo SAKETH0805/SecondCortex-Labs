@@ -20,11 +20,10 @@ class Settings(BaseSettings):
     github_models_chat_model: str = "gpt-4o"
     github_models_embedding_model: str = "text-embedding-3-small"
 
-    # ── Google Gemini (used for Retriever — high-volume) ─────
-    gemini_api_key: str = Field("", validation_alias="GEMINI_API_KEY")
-    gemini_model: str = "gemini-2.0-flash"
-    gemini_embedding_model: str = "text-embedding-004"
-    gemini_endpoint: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    # ── Groq (used for fast LLM agent tasks) ─────────────────
+    groq_api_key: str = Field("", validation_alias="GROQ_API_KEY")
+    groq_model: str = "llama-3.1-8b-instant"
+    groq_endpoint: str = "https://api.groq.com/openai/v1"
 
     # ── Azure OpenAI (legacy fallback) ───────────────────────
     azure_openai_endpoint: str = ""

@@ -45,24 +45,19 @@ def get_embedding_model() -> str:
     return settings.azure_openai_embedding_deployment
 
 
-# ── Gemini (used by Retriever for high-volume snapshot processing) ──
+# ── Groq (used by fast LLM agents) ──────────────────────────────────
 
-def create_gemini_client() -> OpenAI:
-    """Return an OpenAI-compatible client pointed at the Gemini API."""
-    key_status = "present" if settings.gemini_api_key else "MISSING"
-    logger.info("Creating Gemini client (model: %s). API Key: %s",
-                settings.gemini_model, key_status)
+def create_groq_client() -> OpenAI:
+    """Return an OpenAI-compatible client pointed at the Groq API."""
+    key_status = "present" if settings.groq_api_key else "MISSING"
+    logger.info("Creating Groq client (model: %s). API Key: %s",
+                settings.groq_model, key_status)
     return OpenAI(
-        base_url=settings.gemini_endpoint,
-        api_key=settings.gemini_api_key,
+        base_url=settings.groq_endpoint,
+        api_key=settings.groq_api_key,
     )
 
 
-def get_gemini_model() -> str:
-    """Return the Gemini chat model name."""
-    return settings.gemini_model
-
-
-def get_gemini_embedding_model() -> str:
-    """Return the Gemini embedding model name."""
-    return settings.gemini_embedding_model
+def get_groq_model() -> str:
+    """Return the Groq chat model name."""
+    return settings.groq_model

@@ -16,7 +16,7 @@ import logging
 
 from agents.planner import PlanResult
 from models.schemas import QueryResponse, ResurrectionCommand
-from services.llm_client import create_gemini_client, get_gemini_model
+from services.llm_client import create_groq_client, get_groq_model
 from services.rate_limiter import rate_limited_call
 
 logger = logging.getLogger("secondcortex.executor")
@@ -76,7 +76,7 @@ class ExecutorAgent:
     """Synthesizes answers and validates them internally."""
 
     def __init__(self) -> None:
-        self.client = create_gemini_client()
+        self.client = create_groq_client()
 
     async def synthesize(self, question: str, plan_result: PlanResult) -> QueryResponse:
         """
@@ -149,7 +149,7 @@ class ExecutorAgent:
         try:
             response = await rate_limited_call(
                 self.client.chat.completions.create,
-                model=get_gemini_model(),
+                model=get_groq_model(),
                 messages=[
                     {"role": "system", "content": EXECUTOR_SYSTEM_PROMPT},
                     {"role": "user", "content": f"Question: {question}\n\nRetrieved Context:\n{context}"},
@@ -168,7 +168,7 @@ class ExecutorAgent:
         try:
             response = await rate_limited_call(
                 self.client.chat.completions.create,
-                model=get_gemini_model(),
+                model=get_groq_model(),
                 messages=[
                     {"role": "system", "content": VALIDATION_PROMPT},
                     {
