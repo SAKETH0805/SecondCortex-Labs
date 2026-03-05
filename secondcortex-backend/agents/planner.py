@@ -90,7 +90,7 @@ class PlannerAgent:
     async def _generate_plan(self, question: str) -> dict:
         """Call GPT-4o to decompose the question into search tasks."""
         try:
-            response = rate_limited_call(
+            response = await rate_limited_call(
                 self.client.chat.completions.create,
                 model=get_gemini_model(),
                 messages=[

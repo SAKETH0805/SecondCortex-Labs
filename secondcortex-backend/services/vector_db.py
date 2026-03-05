@@ -59,13 +59,13 @@ class VectorDBService:
         """Generate a text embedding. Uses Gemini by default (free tier), falls back to GPT."""
         try:
             if use_gemini:
-                response = rate_limited_call(
+                response = await rate_limited_call(
                     self.gemini_client.embeddings.create,
                     model=get_gemini_embedding_model(),
                     input=text[:8000],
                 )
             else:
-                response = rate_limited_call(
+                response = await rate_limited_call(
                     self.openai_client.embeddings.create,
                     model=get_embedding_model(),
                     input=text[:8000],

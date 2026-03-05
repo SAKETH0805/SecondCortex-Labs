@@ -153,7 +153,7 @@ class RetrieverAgent:
         )
 
         try:
-            response = rate_limited_call(
+            response = await rate_limited_call(
                 self.client.chat.completions.create,
                 model=get_gemini_model(),
                 messages=[

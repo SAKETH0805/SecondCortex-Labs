@@ -147,7 +147,7 @@ class ExecutorAgent:
     async def _generate_draft(self, question: str, context: str) -> dict:
         """Call LLM to draft the answer."""
         try:
-            response = rate_limited_call(
+            response = await rate_limited_call(
                 self.client.chat.completions.create,
                 model=get_gemini_model(),
                 messages=[
@@ -166,7 +166,7 @@ class ExecutorAgent:
     async def _validate_draft(self, question: str, draft: dict, context: str) -> dict:
         """Internal Validation Loop — checks draft against the evidence."""
         try:
-            response = rate_limited_call(
+            response = await rate_limited_call(
                 self.client.chat.completions.create,
                 model=get_gemini_model(),
                 messages=[
