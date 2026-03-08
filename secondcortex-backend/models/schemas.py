@@ -56,10 +56,10 @@ class QueryRequest(BaseModel):
 
 
 class ResurrectionCommand(BaseModel):
-    type: str  # git_stash, git_checkout, open_file, split_terminal, run_command
+    type: str  # git_stash, git_checkout, open_file, split_terminal, run_command, open_workspace
     branch: str | None = None
     file_path: str | None = Field(None, alias="filePath")
-    view_column: int | None = Field(None, alias="viewColumn")
+    viewColumn: int | None = Field(None, alias="viewColumn")
     command: str | None = None
 
     model_config = {"populate_by_name": True}
@@ -67,7 +67,7 @@ class ResurrectionCommand(BaseModel):
 
 class QueryResponse(BaseModel):
     summary: str
-    reasoning_log: list[str] = Field(default_factory=list, alias="reasoningLog")
+    reasoningLog: list[str] = Field(default_factory=list, alias="reasoningLog")
     commands: list[ResurrectionCommand] = Field(default_factory=list)
 
 
@@ -75,10 +75,18 @@ class QueryResponse(BaseModel):
 
 class ResurrectionRequest(BaseModel):
     target: str
+    current_workspace: str | None = None
+
+
+class SafetyReport(BaseModel):
+    conflicts: list[str] = Field(default_factory=list)
+    unstashed_changes: bool = False
+    estimated_risk: str = "low"
 
 
 class ResurrectionResponse(BaseModel):
     commands: list[ResurrectionCommand]
+    impact_analysis: SafetyReport | None = None
 
 
 # ── Internal: stored snapshot record ────────────────────────────

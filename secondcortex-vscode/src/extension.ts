@@ -5,6 +5,7 @@ import { SnapshotCache } from './capture/snapshotCache';
 import { SemanticFirewall } from './security/firewall';
 import { WorkspaceResurrector } from './executor/workspace';
 import { SidebarProvider } from './webview/sidebar';
+import { ShadowGraphPanel } from './webview/shadowGraphPanel';
 import { BackendClient } from './backendClient';
 import { AuthService } from './auth/authService';
 
@@ -18,6 +19,7 @@ export function activate(context: vscode.ExtensionContext) {
     // ── Configuration ──────────────────────────────────────────────
     const config = vscode.workspace.getConfiguration('secondcortex');
     const backendUrl = config.get<string>('backendUrl', 'https://sc-backend-suhaan.azurewebsites.net');
+    const frontendUrl = config.get<string>('frontendUrl', 'https://sc-frontend-suhaan.azurewebsites.net');
     const debouncerDelayMs = config.get<number>('debouncerDelayMs', 30000);
     const noiseThresholdMs = config.get<number>('noiseThresholdMs', 10000);
 
@@ -32,6 +34,7 @@ export function activate(context: vscode.ExtensionContext) {
     const debouncer = new Debouncer(debouncerDelayMs, noiseThresholdMs);
     snapshotCache = new SnapshotCache(context.globalStorageUri.fsPath, outputChannel);
     const resurrector = new WorkspaceResurrector(outputChannel);
+    const shadowGraphPanel = new ShadowGraphPanel(backendClient, resurrector, outputChannel, frontendUrl);
 
     // ── Data Capture ───────────────────────────────────────────────
     eventCapture = new EventCapture(debouncer, firewall, snapshotCache, backendClient, outputChannel);
@@ -82,6 +85,12 @@ export function activate(context: vscode.ExtensionContext) {
                 outputChannel.appendLine(`[SecondCortex] Answer: ${JSON.stringify(response)}`);
                 vscode.window.showInformationMessage(`SecondCortex: ${response?.summary || 'No answer available.'}`);
             }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('secondcortex.openShadowGraph', async () => {
+            shadowGraphPanel.show();
         })
     );
 

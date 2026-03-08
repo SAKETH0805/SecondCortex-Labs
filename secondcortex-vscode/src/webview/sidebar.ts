@@ -67,6 +67,25 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     const question = message.question as string;
                     const sessionId = message.sessionId as string | undefined;
                     this.output.appendLine(`[Sidebar] User asked: ${question} (session: ${sessionId})`);
+
+                    const normalized = (question || '').trim().toLowerCase();
+                    const openShadowGraphIntent =
+                        normalized.includes('open shadow graph') ||
+                        normalized.includes('show shadow graph') ||
+                        normalized.includes('launch shadow graph') ||
+                        normalized === 'secondcortex: open shadow graph';
+
+                    if (openShadowGraphIntent) {
+                        await vscode.commands.executeCommand('secondcortex.openShadowGraph');
+                        this.postMessage({
+                            type: 'answer',
+                            summary: 'Opened Shadow Graph in a side panel. Use the snapshot slider to time-travel and click Restore when ready.',
+                            commands: [],
+                            sessionId,
+                        });
+                        break;
+                    }
+
                     this.postMessage({ type: 'loading' });
 
                     const response = await this.backend.askQuestion(question, sessionId);
@@ -115,6 +134,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 case 'switchSession': {
                     const history = await this.backend.getChatHistory(message.sessionId);
                     this.postMessage({ type: 'history', messages: history, sessionId: message.sessionId });
+                    break;
+                }
+                case 'openShadowGraph': {
+                    await vscode.commands.executeCommand('secondcortex.openShadowGraph');
+                    this.postMessage({
+                        type: 'answer',
+                        summary: 'Opened Shadow Graph in a side panel.',
+                        commands: [],
+                        sessionId: message.sessionId,
+                    });
                     break;
                 }
             }
@@ -635,6 +664,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         </div>
         <div class="header-actions">
             <button class="icon-btn" onclick="toggleHistory()">History</button>
+            <button class="icon-btn" onclick="openShadowGraph()">Shadow Graph</button>
             <button class="icon-btn primary" onclick="startNewChat()">+ New Chat</button>
             <button class="icon-btn" onclick="doLogout()">Logout</button>
         </div>
@@ -776,6 +806,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
         function doLogout() {
             vscode.postMessage({ type: 'logout' });
+        }
+
+        function openShadowGraph() {
+            vscode.postMessage({ type: 'openShadowGraph', sessionId: state.sessionId });
         }
 
         sendBtn.addEventListener('click', send);

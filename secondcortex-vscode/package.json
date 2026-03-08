@@ -67,6 +67,10 @@
       {
         "command": "secondcortex.logout",
         "title": "SecondCortex: Log Out"
+      },
+      {
+        "command": "secondcortex.openShadowGraph",
+        "title": "SecondCortex: Open Shadow Graph"
       }
     ],
     "configuration": {
@@ -76,6 +80,11 @@
           "type": "string",
           "default": "https://sc-backend-suhaan.azurewebsites.net",
           "description": "The URL of the SecondCortex Azure backend API."
+        },
+        "secondcortex.frontendUrl": {
+          "type": "string",
+          "default": "https://sc-frontend-suhaan.azurewebsites.net",
+          "description": "The URL of the SecondCortex frontend dashboard used in the Shadow Graph panel."
         },
         "secondcortex.debouncerDelayMs": {
           "type": "number",

@@ -121,12 +121,17 @@ export class BackendClient {
     /**
      * Request a workspace resurrection plan from the backend.
      */
-    async getResurrectionPlan(target: string): Promise<{ commands: unknown[] } | null> {
+    async getResurrectionPlan(target: string, currentWorkspace?: string): Promise<{ commands: unknown[] } | null> {
         try {
+            const body: any = { target };
+            if (currentWorkspace) {
+                body.current_workspace = currentWorkspace;
+            }
+
             const res = await fetch(`${this.baseUrl}/api/v1/resurrect`, {
                 method: 'POST',
                 headers: await this.getHeaders(),
-                body: JSON.stringify({ target }),
+                body: JSON.stringify(body),
             });
             if (res.status === 401) {
                 await this.handle401();
@@ -232,6 +237,86 @@ export class BackendClient {
             return data.session_id;
         } catch (err) {
             this.output.appendLine(`[BackendClient] Network error creating chat session: ${err}`);
+            return null;
+        }
+    }
+
+    /** Fetch linear snapshot timeline for Shadow Graph time-travel UI. */
+    async getSnapshotTimeline(limit: number = 200): Promise<Array<{
+        id: string;
+        timestamp: string;
+        active_file: string;
+        git_branch: string | null;
+        summary: string;
+        entities: string[];
+    }>> {
+        try {
+            const res = await fetch(`${this.baseUrl}/api/v1/snapshots/timeline?limit=${encodeURIComponent(limit)}`, {
+                headers: await this.getHeaders(),
+            });
+            if (res.status === 401) {
+                await this.handle401();
+                return [];
+            }
+            if (!res.ok) {
+                this.output.appendLine(`[BackendClient] Timeline request failed: ${res.status} ${res.statusText}`);
+                return [];
+            }
+
+            const data = await res.json() as { timeline?: Array<any> };
+            return (data.timeline || []) as Array<{
+                id: string;
+                timestamp: string;
+                active_file: string;
+                git_branch: string | null;
+                summary: string;
+                entities: string[];
+            }>;
+        } catch (err) {
+            this.output.appendLine(`[BackendClient] Network error fetching timeline: ${err}`);
+            return [];
+        }
+    }
+
+    /** Fetch one snapshot record by ID. */
+    async getSnapshotById(snapshotId: string): Promise<{
+        id: string;
+        timestamp: string;
+        workspace_folder?: string;
+        active_file: string;
+        git_branch: string | null;
+        summary: string;
+        entities: string[];
+        shadow_graph: string;
+    } | null> {
+        try {
+            const res = await fetch(`${this.baseUrl}/api/v1/snapshots/${encodeURIComponent(snapshotId)}`, {
+                headers: await this.getHeaders(),
+            });
+            if (res.status === 401) {
+                await this.handle401();
+                return null;
+            }
+            if (res.status === 404) {
+                return null;
+            }
+            if (!res.ok) {
+                this.output.appendLine(`[BackendClient] Snapshot lookup failed: ${res.status} ${res.statusText}`);
+                return null;
+            }
+            const data = await res.json() as { snapshot?: any };
+            return (data.snapshot || null) as {
+                id: string;
+                timestamp: string;
+                workspace_folder?: string;
+                active_file: string;
+                git_branch: string | null;
+                summary: string;
+                entities: string[];
+                shadow_graph: string;
+            } | null;
+        } catch (err) {
+            this.output.appendLine(`[BackendClient] Network error fetching snapshot by ID: ${err}`);
             return null;
         }
     }

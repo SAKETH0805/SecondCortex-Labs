@@ -36,6 +36,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from agents.executor import ExecutorAgent
 from agents.planner import PlannerAgent
 from agents.retriever import RetrieverAgent
+from agents.simulator import SimulatorAgent
 from auth.jwt_handler import verify_token
 from auth.routes import router as auth_router
 from config import settings
@@ -105,6 +106,7 @@ vector_db = VectorDBService()
 retriever = RetrieverAgent(vector_db)
 planner = PlannerAgent(vector_db)
 executor = ExecutorAgent()
+simulator = SimulatorAgent()
 
 # ── JWT Auth dependency ─────────────────────────────────────────
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -187,6 +189,53 @@ async def get_events(user_id: str = Depends(get_current_user)):
         })
 
     return {"events": events}
+
+
+@app.get("/api/v1/snapshots/timeline")
+async def get_snapshot_timeline(
+    limit: int = 200,
+    user_id: str = Depends(get_current_user),
+):
+    """Timeline feed for Shadow Graph time-travel (oldest -> newest)."""
+    capped_limit = max(1, min(limit, 1000))
+    results = await vector_db.get_snapshot_timeline(limit=capped_limit, user_id=user_id)
+
+    timeline = []
+    for r in results:
+        timeline.append({
+            "id": r.get("id"),
+            "timestamp": r.get("timestamp"),
+            "active_file": r.get("active_file"),
+            "git_branch": r.get("git_branch"),
+            "summary": r.get("summary"),
+            "entities": r.get("entities", "").split(",") if r.get("entities") else [],
+        })
+
+    return {"timeline": timeline}
+
+
+@app.get("/api/v1/snapshots/{snapshot_id}")
+async def get_snapshot_by_id(
+    snapshot_id: str,
+    user_id: str = Depends(get_current_user),
+):
+    """Detailed metadata lookup for a single snapshot, used by VS Code preview."""
+    snapshot = await vector_db.get_snapshot_by_id(snapshot_id=snapshot_id, user_id=user_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+
+    return {
+        "snapshot": {
+            "id": snapshot.get("id"),
+            "timestamp": snapshot.get("timestamp"),
+            "workspace_folder": snapshot.get("workspace_folder"),
+            "active_file": snapshot.get("active_file"),
+            "git_branch": snapshot.get("git_branch"),
+            "summary": snapshot.get("summary"),
+            "entities": snapshot.get("entities", "").split(",") if snapshot.get("entities") else [],
+            "shadow_graph": snapshot.get("document") or snapshot.get("shadow_graph") or "",
+        }
+    }
 
 
 
@@ -292,7 +341,26 @@ async def handle_resurrection(
         plan_result,
     )
 
-    return ResurrectionResponse(commands=response.commands)
+    workspace_dir = None
+    if plan_result.retrieved_context:
+        workspace_dir = plan_result.retrieved_context[0].get("workspace_folder")
+
+    safety_report = await simulator.analyze_impact(request.target, workspace_dir)
+
+    commands = response.commands
+    
+    # Check for Cross-Project Context Stitching
+    if request.current_workspace and workspace_dir and request.current_workspace != workspace_dir:
+        logger.info(
+            "Context Stitching Triggered: Current workspace (%s) differs from target workspace (%s)",
+            request.current_workspace, workspace_dir
+        )
+        commands.insert(0, ResurrectionCommand(type="open_workspace", filePath=workspace_dir))
+
+    return ResurrectionResponse(
+        commands=commands,
+        impact_analysis=safety_report
+    )
 
 
 # ── Run server ──────────────────────────────────────────────────

@@ -15,13 +15,10 @@ import { BackendClient } from '../backendClient';
 export class WorkspaceResurrector {
     constructor(private output: vscode.OutputChannel) { }
 
-    /**
-     * Query the backend for the resurrection plan and execute it.
-     */
-    async executeFromQuery(target: string, backend: BackendClient): Promise<void> {
+    async executeFromQuery(target: string, backend: BackendClient, currentWorkspace?: string): Promise<void> {
         this.output.appendLine(`[Resurrector] Requesting resurrection plan for: ${target}`);
 
-        const plan = await backend.getResurrectionPlan(target);
+        const plan = await backend.getResurrectionPlan(target, currentWorkspace);
         if (!plan || !plan.commands || plan.commands.length === 0) {
             vscode.window.showWarningMessage('SecondCortex: No resurrection plan available for that target.');
             return;
@@ -39,6 +36,22 @@ export class WorkspaceResurrector {
         for (const cmd of commands) {
             try {
                 switch (cmd.type) {
+                    case 'open_workspace': {
+                        if (cmd.filePath) {
+                            const userChoice = await vscode.window.showInformationMessage(
+                                `Session target belongs to a different workspace: ${cmd.filePath}. Open it?`,
+                                'Open in New Window',
+                                'Cancel'
+                            );
+                            if (userChoice === 'Open in New Window') {
+                                const uri = vscode.Uri.file(cmd.filePath);
+                                // The true argument here forces opening the folder in a new window natively
+                                await vscode.commands.executeCommand('vscode.openFolder', uri, true);
+                            }
+                        }
+                        return; // Abort remaining commands in this window. The new window will take over context.
+                    }
+
                     case 'git_stash':
                         await this.runTerminalCommand('git stash');
                         break;
@@ -127,7 +140,7 @@ export class WorkspaceResurrector {
 // ── Types ─────────────────────────────────────────────────────────
 
 export interface ResurrectionCommand {
-    type: 'git_stash' | 'git_checkout' | 'open_file' | 'split_terminal' | 'run_command';
+    type: 'git_stash' | 'git_checkout' | 'open_file' | 'split_terminal' | 'run_command' | 'open_workspace';
     branch?: string;
     filePath?: string;
     viewColumn?: number;

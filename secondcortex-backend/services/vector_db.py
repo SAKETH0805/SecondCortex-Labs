@@ -165,3 +165,45 @@ class VectorDBService:
         except Exception as exc:
             logger.error("get_recent_snapshots failed: %s", exc)
             return []
+
+    async def get_snapshot_timeline(self, limit: int = 200, user_id: str | None = None) -> list[dict]:
+        """Fetch a chronologically sorted timeline of snapshot metadata."""
+        collection = self._get_collection(user_id)
+        if collection is None:
+            logger.warning("Chroma collection not available — returning empty timeline.")
+            return []
+
+        try:
+            results = collection.get(limit=limit, include=["metadatas"])
+            if not results or not results.get("metadatas"):
+                return []
+
+            metadatas = [dict(meta) for meta in results["metadatas"] if meta]
+            # Oldest -> newest for linear slider traversal.
+            metadatas.sort(key=lambda m: m.get("timestamp", ""))
+            return metadatas
+        except Exception as exc:
+            logger.error("get_snapshot_timeline failed: %s", exc)
+            return []
+
+    async def get_snapshot_by_id(self, snapshot_id: str, user_id: str | None = None) -> dict | None:
+        """Fetch one snapshot by ID from Chroma metadata/documents."""
+        collection = self._get_collection(user_id)
+        if collection is None:
+            logger.warning("Chroma collection not available — snapshot lookup skipped.")
+            return None
+
+        try:
+            results = collection.get(ids=[snapshot_id], include=["metadatas", "documents"])
+            metadatas = (results or {}).get("metadatas") or []
+            documents = (results or {}).get("documents") or []
+
+            if not metadatas:
+                return None
+
+            metadata = dict(metadatas[0]) if metadatas[0] else {}
+            metadata["document"] = documents[0] if documents else ""
+            return metadata
+        except Exception as exc:
+            logger.error("get_snapshot_by_id failed for %s: %s", snapshot_id, exc)
+            return None
