@@ -15,6 +15,7 @@ import logging
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from services.vector_db import VectorDBService
 
 # Initialize logging for MCP server
@@ -25,8 +26,13 @@ logger = logging.getLogger("secondcortex.mcp")
 logger.info("Initializing VectorDBService for MCP...")
 vector_db = VectorDBService()
 
-# Create the MCP Server
-mcp = FastMCP("SecondCortex API")
+# Create the MCP Server, allowing the Azure Production Host
+mcp = FastMCP(
+    "SecondCortex API",
+    transport_security=TransportSecuritySettings(
+        allowed_hosts=["sc-backend-suhaan.azurewebsites.net", "localhost", "127.0.0.1"]
+    )
+)
 
 @mcp.tool()
 async def search_memory(query: str, top_k: int = 5, user_id: str | None = None) -> str:
