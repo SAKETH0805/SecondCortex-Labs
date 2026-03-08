@@ -101,6 +101,10 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ── Include auth routes ─────────────────────────────────────────
 app.include_router(auth_router)
 
+# ── MCP Server Mount ────────────────────────────────────────────
+from mcp_server import mcp
+app.mount("/mcp", mcp.sse_app())
+
 # ── Service & Agent Initialization ──────────────────────────────
 vector_db = VectorDBService()
 retriever = RetrieverAgent(vector_db)
