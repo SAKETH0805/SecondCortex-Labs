@@ -62,9 +62,16 @@ class UserDB:
                     password_hash TEXT NOT NULL,
                     password_salt TEXT NOT NULL,
                     display_name TEXT NOT NULL DEFAULT '',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    mcp_api_key TEXT UNIQUE
                 )
             """)
+            # Migration to add mcp_api_key to existing users table
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN mcp_api_key TEXT")
+            except sqlite3.OperationalError:
+                # Column already exists
+                pass
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS chat_sessions (
                     id TEXT PRIMARY KEY,
@@ -193,4 +200,39 @@ class UserDB:
             ).fetchone()
         if row:
             return {"id": row[0], "email": row[1], "display_name": row[2]}
+        return None
+
+    def generate_mcp_api_key(self, user_id: str) -> str:
+        """Generate a new MCP API key for the user and save it."""
+        import secrets
+        new_key = f"sc_mcp_{secrets.token_urlsafe(32)}"
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE users SET mcp_api_key = ? WHERE id = ?",
+                (new_key, user_id),
+            )
+            conn.commit()
+        logger.info("Generated new MCP API key for user: %s", user_id)
+        return new_key
+
+    def get_user_by_mcp_api_key(self, api_key: str) -> dict | None:
+        """Lookup a user by their MCP API key."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT id, email, display_name FROM users WHERE mcp_api_key = ?",
+                (api_key,),
+            ).fetchone()
+        if row:
+            return {"id": row[0], "email": row[1], "display_name": row[2]}
+        return None
+
+    def get_mcp_api_key(self, user_id: str) -> str | None:
+        """Get the current MCP API key for a user."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT mcp_api_key FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+        if row:
+            return row[0]
         return None

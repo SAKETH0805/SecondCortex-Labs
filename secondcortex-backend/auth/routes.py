@@ -6,11 +6,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, EmailStr
 
 from auth.database import UserDB
-from auth.jwt_handler import create_token
+from auth.jwt_handler import create_token, get_current_user
 
 logger = logging.getLogger("secondcortex.auth.routes")
 
@@ -36,6 +36,10 @@ class AuthResponse(BaseModel):
     user_id: str
     email: str
     display_name: str
+
+
+class MCPKeyResponse(BaseModel):
+    api_key: str | None
 
 
 @router.post("/signup", response_model=AuthResponse)
@@ -75,3 +79,17 @@ async def login(req: LoginRequest):
         email=user["email"],
         display_name=user["display_name"],
     )
+
+
+@router.post("/mcp-key", response_model=MCPKeyResponse)
+async def generate_mcp_key(user_id: str = Depends(get_current_user)):
+    """Generate a new MCP API key for the current user."""
+    new_key = user_db.generate_mcp_api_key(user_id)
+    return MCPKeyResponse(api_key=new_key)
+
+
+@router.get("/mcp-key", response_model=MCPKeyResponse)
+async def get_mcp_key(user_id: str = Depends(get_current_user)):
+    """Get the current user's existing MCP API key."""
+    api_key = user_db.get_mcp_api_key(user_id)
+    return MCPKeyResponse(api_key=api_key)

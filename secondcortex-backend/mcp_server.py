@@ -17,6 +17,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from services.vector_db import VectorDBService
+from auth.database import UserDB
 
 # Initialize logging for MCP server
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +26,7 @@ logger = logging.getLogger("secondcortex.mcp")
 # Initialize the VectorDB service
 logger.info("Initializing VectorDBService for MCP...")
 vector_db = VectorDBService()
+user_db = UserDB()
 
 # Create the MCP Server, allowing ANY Production Host (Public)
 mcp = FastMCP(
@@ -35,19 +37,27 @@ mcp = FastMCP(
 )
 
 @mcp.tool()
-async def search_memory(query: str, top_k: int = 5, user_id: str | None = None) -> str:
+async def search_memory(query: str, api_key: str, top_k: int = 5) -> str:
     """
     Search the developer's SecondCortex memory (IDE history snapshots) for relevant technical context.
     
     Args:
         query: The semantic search query (e.g., "authentication logic", "database schema changes")
+        api_key: The user's personal SecondCortex MCP API Key, generated from the dashboard
         top_k: Number of relevant snapshots to retrieve (default: 5)
-        user_id: Optional user ID to isolate search. If not provided, default backend user is used.
     
     Returns:
         A formatted summary string containing the best matching historical IDE snapshots.
     """
     logger.info(f"MCP search_memory called with query: '{query}'")
+    
+    user = user_db.get_user_by_mcp_api_key(api_key)
+    if not user:
+        logger.warning("MCP Authentication Failed: Invalid API Key provided.")
+        return "Authentication Failed: Invalid API Key. Please generate a valid key from your SecondCortex dashboard."
+        
+    user_id = user["id"]
+    logger.info(f"MCP Authenticated for user: {user.get('display_name', user_id)}")
     
     results = await vector_db.semantic_search(query, top_k=top_k, user_id=user_id)
     

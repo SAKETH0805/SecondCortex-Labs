@@ -37,7 +37,7 @@ from agents.executor import ExecutorAgent
 from agents.planner import PlannerAgent
 from agents.retriever import RetrieverAgent
 from agents.simulator import SimulatorAgent
-from auth.jwt_handler import verify_token
+from auth.jwt_handler import get_current_user
 from auth.routes import router as auth_router
 from config import settings
 from models import schemas
@@ -113,25 +113,7 @@ planner = PlannerAgent(vector_db)
 executor = ExecutorAgent()
 simulator = SimulatorAgent()
 
-# ── JWT Auth dependency ─────────────────────────────────────────
-bearer_scheme = HTTPBearer(auto_error=False)
 
-
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> str:
-    """
-    Validates the Bearer JWT token and returns the user_id.
-    Every protected endpoint requires a valid token.
-    """
-    if credentials is None:
-        raise HTTPException(status_code=401, detail="Missing Authorization header. Please log in.")
-
-    payload = verify_token(credentials.credentials)
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token. Please log in again.")
-
-    return payload["sub"]  # user_id
 
 
 # ── Redirects ───────────────────────────────────────────────────
