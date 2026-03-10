@@ -666,15 +666,31 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         .shield-badge {
             display: flex;
             align-items: center;
-            gap: 4px;
+            gap: 6px;
+            margin-top: 6px;
+            flex-wrap: wrap;
+        }
+
+        .shield-pill {
+            display: inline-flex;
+            align-items: center;
             font-size: 10px;
             font-weight: 700;
             color: var(--text-main);
-            background: rgba(255, 255, 255, 0.08);
-            padding: 2px 8px;
-            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            padding: 3px 9px;
+            border-radius: 999px;
             text-transform: uppercase;
             letter-spacing: 0.05em;
+            line-height: 1;
+            white-space: nowrap;
+        }
+
+        .shield-pill.secure {
+            background: rgba(62, 202, 137, 0.18);
+            border-color: rgba(62, 202, 137, 0.55);
+            color: #ccffe7;
         }
 
         .user-info {
@@ -702,7 +718,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         <div>
             <h2 id="current-title">SecondCortex</h2>
             <div class="shield-badge">
-                <span style="font-size: 12px;">SECURE</span> Privacy Protected
+                <span class="shield-pill secure">Secure</span>
+                <span class="shield-pill">Privacy Protected</span>
             </div>
         </div>
         <div class="header-actions">

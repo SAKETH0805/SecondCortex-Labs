@@ -6,10 +6,14 @@ SecondCortex is a VS Code extension designed to capture and resurrect your devel
 
 ## 🚀 Key Features
 
-- **Workspace Resurrection**: Automatically restores your Git branch, stashes, open file tabs, and terminal state.
-- **Intelligent Snapshotting**: Captures granular context of your work session, including open files and terminal commands.
-- **Semantic Firewall**: Automatically scrubs secrets and sensitive data before context leaves your machine.
-- **CLI & Chat Integration**: Trigger resurrection via the `/resurrect` chat command or the `cortex resurrect` terminal CLI.
+- **Workspace Resurrection Engine**: Restore branch context, stashes, open files, and terminal intent in one flow.
+- **Live Context Capture**: Continuously snapshots editor and terminal activity with debounce and noise filtering.
+- **Secure-By-Default Pipeline**: Semantic Firewall redacts keys, passwords, and sensitive tokens before sync.
+- **SecondCortex Sidebar Chat**: Ask architecture or project-history questions directly inside VS Code.
+- **Session History + New Chat**: Quickly revisit prior conversations or start clean context threads.
+- **Shadow Graph Panel**: Open the visual context graph to inspect relationships across captured work.
+- **Safe Authentication Layer**: Login state uses VS Code SecretStorage for encrypted local token handling.
+- **CLI + Command Palette Support**: Trigger core actions from slash commands, extension commands, or terminal CLI.
 
 ## 🛠️ Getting Started
 
