@@ -15,7 +15,8 @@ import logging
 import sys
 import os
 import re
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
 from typing import Any
 
 # ── Force Python to see the local directories (fixes Azure ModuleNotFoundError) ──────────
@@ -51,11 +52,14 @@ from models.schemas import (
     ResurrectionCommand,
     SafetyReport,
     SnapshotPayload,
+    ArchaeologyRequest,
+    ArchaeologyResponse,
     ChatMessage,
     ChatHistoryResponse,
 )
 from auth.routes import user_db
 from services.vector_db import VectorDBService
+from services.llm_client import create_llm_client, get_chat_model
 
 # ── Logging setup ───────────────────────────────────────────────
 logging.basicConfig(
@@ -116,6 +120,7 @@ retriever = RetrieverAgent(vector_db)
 planner = PlannerAgent(vector_db)
 executor = ExecutorAgent()
 simulator = SimulatorAgent()
+archaeology_llm_client = create_llm_client()
 
 # Most recently received raw snapshot per user, updated immediately on /snapshot ingest.
 _latest_ingested_snapshot: dict[str, dict[str, Any]] = {}
@@ -197,6 +202,99 @@ def _parse_terminal_commands(value: Any) -> list[str]:
 
 def _is_snapshot_id(target: str) -> bool:
     return bool(re.match(r"^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$", target.strip().lower()))
+
+
+def _parse_snapshot_terminal_commands(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return [str(v).strip() for v in parsed if str(v).strip()]
+        except Exception:
+            return []
+    return []
+
+
+def _deduplicate_snapshots(snapshots: list[dict]) -> list[dict]:
+    seen_ids: set[str] = set()
+    deduped: list[dict] = []
+
+    for snapshot in snapshots:
+        snapshot_id = str(snapshot.get("id") or "")
+        dedupe_key = snapshot_id or f"{snapshot.get('timestamp')}::{snapshot.get('active_file')}"
+        if dedupe_key in seen_ids:
+            continue
+        seen_ids.add(dedupe_key)
+        deduped.append(snapshot)
+
+    deduped.sort(key=lambda s: str(s.get("timestamp") or ""))
+    return deduped
+
+
+def _extract_relevant_commands(snapshots: list[dict]) -> list[str]:
+    commands: list[str] = []
+    for snapshot in snapshots:
+        for cmd in _parse_snapshot_terminal_commands(snapshot.get("terminal_commands"))[-3:]:
+            if cmd not in commands:
+                commands.append(cmd)
+    return commands[:6]
+
+
+async def _synthesize_decision_history(
+    symbol_name: str,
+    commit_message: str,
+    snapshots: list[dict],
+) -> tuple[str, list[str], list[str], float]:
+    snapshot_context = "\n\n".join([
+        (
+            f"[{s.get('timestamp', 'unknown')}] Branch: {s.get('git_branch') or 'unknown'}\n"
+            f"Active file: {s.get('active_file') or 'unknown'}\n"
+            f"Terminal: {_parse_snapshot_terminal_commands(s.get('terminal_commands'))[-3:] or 'none'}\n"
+            f"Summary: {s.get('summary') or 'No summary'}"
+        )
+        for s in snapshots
+    ])
+
+    prompt = f"""
+A developer is hovering over the function `{symbol_name}` in their editor.
+The commit that last changed this function has the message: "{commit_message}"
+
+Based on the workspace snapshots captured around the time of this change,
+reconstruct the decision history. Be concise — this is a tooltip, not an essay.
+
+Answer these questions in ≤4 sentences total:
+1. Why was this function written this way? (1 sentence)
+2. What was tried before and why it didn't work? (1-2 sentences, only if evidence exists)
+3. What key terminal commands or context led to this approach? (1 sentence, only if relevant)
+
+If there's not enough context, say "No workspace history found for this change."
+Do not hallucinate. Only state what the snapshots support.
+
+Workspace snapshots:
+{snapshot_context}
+"""
+
+    response = archaeology_llm_client.chat.completions.create(
+        model=get_chat_model(),
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=150,
+        temperature=0.2,
+    )
+
+    summary = (response.choices[0].message.content or "").strip() or "No workspace history found for this change."
+
+    newest_branch = snapshots[-1].get("git_branch") if snapshots else None
+    branches_tried = list(dict.fromkeys([
+        str(s.get("git_branch"))
+        for s in snapshots
+        if s.get("git_branch") and s.get("git_branch") != newest_branch
+    ]))[:3]
+
+    terminal_commands = _extract_relevant_commands(snapshots)
+    confidence = min(len(snapshots) / 5.0, 1.0)
+    return summary, branches_tried, terminal_commands, confidence
 
 
 def _is_safe_resurrection_command(command: str) -> bool:
@@ -573,6 +671,96 @@ async def handle_resurrection(
         commands=commands,
         impact_analysis=impact,
         planSummary=plan_summary,
+    )
+
+
+@app.post("/api/v1/decision-archaeology", response_model=ArchaeologyResponse)
+async def decision_archaeology(
+    request: ArchaeologyRequest,
+    user_id: str = Depends(get_current_user),
+):
+    """
+    Given function + file + commit context, reconstruct decision history
+    from stored workspace snapshots and synthesize a hover-friendly summary.
+    """
+    logger.info(
+        "Decision archaeology request: %s in %s (user=%s)",
+        request.symbol_name,
+        request.file_path,
+        user_id,
+    )
+
+    query = (
+        f"File: {request.file_path}\n"
+        f"Function: {request.symbol_name}\n"
+        f"Signature: {request.signature}\n"
+        f"Commit: {request.commit_hash}\n"
+        f"Commit message: {request.commit_message}\n"
+        f"Author: {request.author}\n"
+        f"Timestamp: {request.timestamp.isoformat()}"
+    )
+
+    time_window_start = request.timestamp - timedelta(hours=2)
+    time_window_end = request.timestamp + timedelta(hours=1)
+
+    timeline = await vector_db.get_snapshot_timeline(limit=2000, user_id=user_id)
+    time_filtered: list[dict] = []
+    for snapshot in timeline:
+        if str(snapshot.get("active_file") or "") != request.file_path:
+            continue
+
+        snapshot_ts = _parse_iso_timestamp(str(snapshot.get("timestamp") or ""))
+        if snapshot_ts is None:
+            continue
+
+        if time_window_start <= snapshot_ts <= time_window_end:
+            time_filtered.append(snapshot)
+
+    semantic_results = await vector_db.semantic_search(query=query, top_k=8, user_id=user_id)
+    semantic_file_filtered = [
+        s for s in semantic_results
+        if str(s.get("active_file") or "") == request.file_path
+    ]
+
+    symbol_results = await vector_db.semantic_search(
+        query=f"function {request.symbol_name} implementation decision",
+        top_k=5,
+        user_id=user_id,
+    )
+    symbol_file_filtered = [
+        s for s in symbol_results
+        if str(s.get("active_file") or "") == request.file_path
+    ]
+
+    all_results = _deduplicate_snapshots(
+        time_filtered + semantic_file_filtered + symbol_file_filtered
+    )
+
+    if not all_results:
+        return ArchaeologyResponse(found=False, summary=None)
+
+    try:
+        summary, branches_tried, terminal_commands, confidence = await _synthesize_decision_history(
+            symbol_name=request.symbol_name,
+            commit_message=request.commit_message,
+            snapshots=all_results,
+        )
+    except Exception as exc:
+        logger.error("Decision synthesis failed: %s", exc)
+        return ArchaeologyResponse(
+            found=True,
+            summary="No workspace history found for this change.",
+            branchesTried=[],
+            terminalCommands=[],
+            confidence=0.0,
+        )
+
+    return ArchaeologyResponse(
+        found=True,
+        summary=summary,
+        branchesTried=branches_tried,
+        terminalCommands=terminal_commands,
+        confidence=confidence,
     )
 
 

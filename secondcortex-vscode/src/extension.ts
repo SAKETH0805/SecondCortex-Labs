@@ -8,6 +8,7 @@ import { SidebarProvider } from './webview/sidebar';
 import { ShadowGraphPanel } from './webview/shadowGraphPanel';
 import { BackendClient } from './backendClient';
 import { AuthService } from './auth/authService';
+import { registerDecisionArchaeology } from './decision/decisionHover';
 
 let eventCapture: EventCapture | undefined;
 let snapshotCache: SnapshotCache | undefined;
@@ -45,6 +46,9 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('secondcortex.chatView', sidebarProvider)
     );
+
+    // ── Decision Archaeology Hover ───────────────────────────────
+    registerDecisionArchaeology(context, backendClient);
 
     // ── Commands ───────────────────────────────────────────────────
     context.subscriptions.push(

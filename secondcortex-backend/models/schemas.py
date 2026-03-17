@@ -90,6 +90,30 @@ class ResurrectionResponse(BaseModel):
     plan_summary: str | None = Field(None, alias="planSummary")
 
 
+# ── Decision Archaeology ───────────────────────────────────────
+
+class ArchaeologyRequest(BaseModel):
+    file_path: str = Field(..., alias="filePath")
+    symbol_name: str = Field(..., alias="symbolName")
+    signature: str
+    commit_hash: str = Field(..., alias="commitHash")
+    commit_message: str = Field("", alias="commitMessage")
+    author: str = ""
+    timestamp: datetime
+
+    model_config = {"populate_by_name": True}
+
+
+class ArchaeologyResponse(BaseModel):
+    found: bool
+    summary: str | None = None
+    branches_tried: list[str] = Field(default_factory=list, alias="branchesTried")
+    terminal_commands: list[str] = Field(default_factory=list, alias="terminalCommands")
+    confidence: float = 0.0
+
+    model_config = {"populate_by_name": True}
+
+
 # ── Internal: stored snapshot record ────────────────────────────
 
 class StoredSnapshot(BaseModel):
