@@ -358,7 +358,8 @@ async def handle_query(
         # Avoids LLM choosing semantically similar but older snapshots.
         if _is_latest_snapshot_question(req.question):
             wants_main = _question_wants_main_branch(req.question)
-            recent = await vector_db.get_recent_snapshots(limit=50, user_id=user_id)
+            timeline = await vector_db.get_snapshot_timeline(limit=50, user_id=user_id)
+            recent = list(reversed(timeline))
             latest_ingested = _latest_ingested_snapshot.get(user_id)
 
             if wants_main:

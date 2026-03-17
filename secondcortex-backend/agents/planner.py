@@ -62,7 +62,9 @@ class PlannerAgent:
         # This avoids semantic retrieval returning older but semantically similar snapshots.
         if self._is_latest_lookup_question(question):
             logger.info("Detected latest-snapshot style query. Using recency retrieval.")
-            recent = await self.vector_db.get_recent_snapshots(limit=25, user_id=user_id)
+            timeline = await self.vector_db.get_snapshot_timeline(limit=25, user_id=user_id)
+            # Timeline is oldest -> newest. For recency retrieval we want newest first.
+            recent = list(reversed(timeline))
             recent = self._apply_optional_branch_filter(recent, question)
             return PlanResult(
                 intent="Fetch most recent snapshot context",
@@ -93,6 +95,20 @@ class PlannerAgent:
             if rid not in seen_ids:
                 seen_ids.add(rid)
                 unique_results.append(r)
+
+        # Always seed chat context with the newest snapshot first so extension chat
+        # reflects the latest captured IDE state.
+        latest_timeline = await self.vector_db.get_snapshot_timeline(limit=1, user_id=user_id)
+        latest_snapshot = latest_timeline[-1] if latest_timeline else None
+        if latest_snapshot:
+            latest_id = latest_snapshot.get("id", "")
+            if latest_id and latest_id not in seen_ids:
+                unique_results.insert(0, latest_snapshot)
+            elif unique_results and latest_id:
+                # If latest is already present, move it to the front.
+                latest_idx = next((i for i, item in enumerate(unique_results) if item.get("id", "") == latest_id), -1)
+                if latest_idx > 0:
+                    unique_results.insert(0, unique_results.pop(latest_idx))
 
         return PlanResult(
             intent=plan.get("intent", question),
