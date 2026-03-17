@@ -48,6 +48,8 @@ from models.schemas import (
     QueryResponse,
     ResurrectionRequest,
     ResurrectionResponse,
+    ResurrectionCommand,
+    SafetyReport,
     SnapshotPayload,
     ChatMessage,
     ChatHistoryResponse,
@@ -177,6 +179,124 @@ def _pick_newer_snapshot(a: dict | None, b: dict | None) -> dict | None:
     if tb and not ta:
         return b
     return a
+
+
+def _parse_terminal_commands(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str) and value.strip():
+        try:
+            import json
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return [str(v).strip() for v in parsed if str(v).strip()]
+        except Exception:
+            return []
+    return []
+
+
+def _is_snapshot_id(target: str) -> bool:
+    return bool(re.match(r"^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$", target.strip().lower()))
+
+
+def _is_safe_resurrection_command(command: str) -> bool:
+    normalized = (command or "").strip().lower()
+    if not normalized:
+        return False
+    blocked_prefixes = (
+        "rm ", "del ", "rmdir ", "format ", "shutdown ", "reboot ",
+        "git reset --hard", "git clean -fd", "dropdb ", "sudo ", "powershell -c",
+    )
+    if normalized.startswith(blocked_prefixes):
+        return False
+    allowed_prefixes = (
+        "npm ", "pnpm ", "yarn ", "python ", "pytest ", "uvicorn ", "poetry ",
+        "pip ", "make ", "cargo ", "go ", "dotnet ",
+    )
+    return normalized.startswith(allowed_prefixes)
+
+
+def _workspaces_match(current_workspace: str | None, target_workspace: str | None) -> bool:
+    if not current_workspace or not target_workspace:
+        return False
+    left = os.path.normcase(os.path.abspath(current_workspace))
+    right = os.path.normcase(os.path.abspath(target_workspace))
+    return left == right
+
+
+async def _resolve_resurrection_snapshot(target: str, user_id: str) -> dict | None:
+    normalized_target = (target or "").strip()
+    if not normalized_target:
+        return None
+
+    if _is_snapshot_id(normalized_target):
+        by_id = await vector_db.get_snapshot_by_id(snapshot_id=normalized_target, user_id=user_id)
+        if by_id:
+            return by_id
+
+    timeline = await vector_db.get_snapshot_timeline(limit=1000, user_id=user_id)
+    if not timeline:
+        return None
+
+    target_lower = normalized_target.lower()
+
+    branch_matches = [
+        s for s in timeline
+        if str(s.get("git_branch", "")).strip().lower() == target_lower
+    ]
+    if branch_matches:
+        return branch_matches[-1]
+
+    path_or_summary_matches = [
+        s for s in timeline
+        if target_lower in str(s.get("active_file", "")).lower()
+        or target_lower in str(s.get("summary", "")).lower()
+    ]
+    if path_or_summary_matches:
+        return path_or_summary_matches[-1]
+
+    return None
+
+
+def _build_resurrection_plan(snapshot: dict, target: str, current_workspace: str | None) -> tuple[list[ResurrectionCommand], str, SafetyReport]:
+    commands: list[ResurrectionCommand] = []
+
+    workspace_dir = str(snapshot.get("workspace_folder") or "").strip() or None
+    active_file = str(snapshot.get("active_file") or "").strip() or None
+    branch = str(snapshot.get("git_branch") or "").strip() or None
+    timestamp = str(snapshot.get("timestamp") or "unknown time")
+    summary = str(snapshot.get("summary") or "No summary available.")
+
+    should_open_workspace = bool(workspace_dir and not _workspaces_match(current_workspace, workspace_dir))
+    if should_open_workspace and workspace_dir:
+        commands.append(ResurrectionCommand(type="open_workspace", filePath=workspace_dir))
+
+    commands.append(ResurrectionCommand(type="git_stash"))
+    if branch:
+        commands.append(ResurrectionCommand(type="git_checkout", branch=branch))
+
+    if active_file:
+        commands.append(ResurrectionCommand(type="open_file", filePath=active_file, viewColumn=1))
+
+    terminal_commands = _parse_terminal_commands(snapshot.get("terminal_commands"))
+    last_safe_terminal_command = next((cmd for cmd in reversed(terminal_commands) if _is_safe_resurrection_command(cmd)), None)
+    if last_safe_terminal_command:
+        commands.append(ResurrectionCommand(type="split_terminal", command=last_safe_terminal_command))
+
+    plan_summary = (
+        f"Resolved target '{target}' to snapshot at {timestamp}. "
+        f"Will stash local changes, checkout branch {branch or 'current'}, "
+        f"open {active_file or 'the captured file'}, and restore a safe terminal command. "
+        f"Snapshot summary: {summary}"
+    )
+
+    estimated_risk = "medium" if branch or should_open_workspace else "low"
+    impact = SafetyReport(
+        conflicts=[],
+        unstashed_changes=True,
+        estimated_risk=estimated_risk,
+    )
+    return commands, plan_summary, impact
 
 
 
@@ -433,36 +553,26 @@ async def handle_resurrection(
     """
     logger.info("Resurrection requested for target: %s (user=%s)", request.target, user_id)
 
-    plan_result = await planner.plan(
-        f"Find the workspace state for branch or snapshot: {request.target}",
-        user_id=user_id,
-    )
-
-    response = await executor.synthesize(
-        f"Generate workspace resurrection commands for: {request.target}",
-        plan_result,
-    )
-
-    workspace_dir = None
-    if plan_result.retrieved_context:
-        workspace_dir = plan_result.retrieved_context[0].get("workspace_folder")
-
-    safety_report = await simulator.analyze_impact(request.target, workspace_dir)
-
-    commands = response.commands
-    
-    # Check for Cross-Project Context Stitching
-    if request.current_workspace and workspace_dir and request.current_workspace != workspace_dir:
-        logger.info(
-            "Context Stitching Triggered: Current workspace (%s) differs from target workspace (%s)",
-            request.current_workspace, workspace_dir
+    snapshot = await _resolve_resurrection_snapshot(request.target, user_id)
+    if not snapshot:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No matching snapshot found for that target. "
+                "Try a valid branch name, file hint, or exact snapshot ID from Shadow Graph."
+            ),
         )
-        commands.insert(0, ResurrectionCommand(type="open_workspace", filePath=workspace_dir))
+
+    commands, plan_summary, impact = _build_resurrection_plan(
+        snapshot=snapshot,
+        target=request.target,
+        current_workspace=request.current_workspace,
+    )
 
     return ResurrectionResponse(
         commands=commands,
-        impact_analysis=safety_report,
-        plan_summary=response.summary
+        impact_analysis=impact,
+        planSummary=plan_summary,
     )
 
 

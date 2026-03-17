@@ -69,7 +69,8 @@ export function activate(context: vscode.ExtensionContext) {
                 placeHolder: 'e.g., feature/auth-fix or snapshot-abc123',
             });
             if (answer) {
-                await resurrector.executeFromQuery(answer, backendClient);
+                const currentWorkspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+                await resurrector.executeFromQuery(answer, backendClient, currentWorkspace);
             }
         })
     );

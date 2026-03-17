@@ -9,6 +9,7 @@ Supports per-user namespaced collections for multi-tenant isolation.
 from __future__ import annotations
 
 import logging
+import json
 from typing import Any
 
 import chromadb
@@ -86,6 +87,7 @@ class VectorDBService:
                 "language_id": str(snapshot.language_id or ""),
                 "shadow_graph": str((snapshot.shadow_graph or "")[:5000]),
                 "git_branch": str(snapshot.git_branch or ""),
+                "terminal_commands": json.dumps(snapshot.terminal_commands or []),
                 "summary": str(snapshot.metadata.summary if snapshot.metadata else ""),
                 "entities": ",".join(snapshot.metadata.entities) if snapshot.metadata and snapshot.metadata.entities else "",
             }
