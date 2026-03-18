@@ -158,6 +158,7 @@ docker compose down
 - `POST /api/v1/auth/signup`
 - `POST /api/v1/auth/login`
 - `POST /api/v1/snapshot`
+- `POST /api/v1/ingest/git`
 - `POST /api/v1/query`
 - `POST /api/v1/resurrect`
 - `GET /api/v1/events`

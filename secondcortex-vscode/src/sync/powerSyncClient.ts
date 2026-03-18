@@ -13,6 +13,7 @@ export interface PowerSyncSnapshotRow {
     git_branch: string | null;
     terminal_commands: string;
     summary: string;
+    enriched_context: string;
     timestamp: number;
     synced: number;
 }
@@ -51,6 +52,7 @@ export class PowerSyncClient {
         gitBranch: string | null;
         terminalCommands: string[];
         summary: string;
+        enrichedContext: Record<string, unknown> | null;
         timestampMs: number;
     }): PowerSyncSnapshotRow {
         return {
@@ -62,6 +64,7 @@ export class PowerSyncClient {
             git_branch: params.gitBranch,
             terminal_commands: JSON.stringify(params.terminalCommands || []),
             summary: params.summary,
+            enriched_context: JSON.stringify(params.enrichedContext || {}),
             timestamp: params.timestampMs,
             synced: 0,
         };
@@ -71,10 +74,10 @@ export class PowerSyncClient {
         const stmt = this.db.prepare(`
             INSERT OR REPLACE INTO snapshots (
                 id, user_id, team_id, workspace, active_file, git_branch,
-                terminal_commands, summary, timestamp, synced
+                terminal_commands, summary, enriched_context, timestamp, synced
             ) VALUES (
                 @id, @user_id, @team_id, @workspace, @active_file, @git_branch,
-                @terminal_commands, @summary, @timestamp, @synced
+                @terminal_commands, @summary, @enriched_context, @timestamp, @synced
             )
         `);
         stmt.run(row);
@@ -162,18 +165,28 @@ export class PowerSyncClient {
                 git_branch TEXT,
                 terminal_commands TEXT NOT NULL,
                 summary TEXT NOT NULL,
+                enriched_context TEXT NOT NULL DEFAULT '{}',
                 timestamp INTEGER NOT NULL,
                 synced INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_snapshots_synced_timestamp
             ON snapshots (synced, timestamp DESC);
         `);
+
+        const existingColumns = this.db
+            .prepare('PRAGMA table_info(snapshots)')
+            .all()
+            .map((c: { name: string }) => c.name);
+
+        if (!existingColumns.includes('enriched_context')) {
+            this.db.exec("ALTER TABLE snapshots ADD COLUMN enriched_context TEXT NOT NULL DEFAULT '{}';");
+        }
     }
 
     private getPendingRows(limit: number): PowerSyncSnapshotRow[] {
         const stmt = this.db.prepare(`
             SELECT id, user_id, team_id, workspace, active_file, git_branch,
-                   terminal_commands, summary, timestamp, synced
+                     terminal_commands, summary, enriched_context, timestamp, synced
             FROM snapshots
             WHERE synced = 0
             ORDER BY timestamp ASC

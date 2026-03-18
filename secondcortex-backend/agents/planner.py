@@ -120,7 +120,7 @@ class PlannerAgent:
         if not q:
             return False
 
-        has_recency = bool(re.search(r"\b(latest|newest|most recent|current|last|fetch latest)\b", q))
+        has_recency = bool(re.search(r"\b(latest|newest|most recent|recent|current|last|fetch latest)\b", q))
         has_snapshot_context = bool(re.search(r"\b(snapshot|snapshots|timeline|context|update|edited|editing|file|commit|branch)\b", q))
         return has_recency and has_snapshot_context
 

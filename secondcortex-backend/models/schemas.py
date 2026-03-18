@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,109 @@ class SnapshotPayload(BaseModel):
     shadow_graph: str = Field(..., alias="shadowGraph")
     git_branch: str | None = Field(None, alias="gitBranch")
     terminal_commands: list[str] = Field(default_factory=list, alias="terminalCommands")
+
+    model_config = {"populate_by_name": True}
+
+
+class CommentCapture(BaseModel):
+    type: Literal["inline", "block", "jsdoc", "todo", "fixme", "hack"]
+    content: str = ""
+    line: int = 0
+    function_context: str = Field("global", alias="functionContext")
+    is_new: bool = Field(False, alias="isNew")
+
+    model_config = {"populate_by_name": True}
+
+
+class TodoCapture(BaseModel):
+    type: Literal["TODO", "FIXME", "HACK", "NOTE", "TEMP"]
+    content: str = ""
+    file: str = ""
+    function_context: str = Field("global", alias="functionContext")
+    age: Literal["new", "existing"] = "existing"
+
+    model_config = {"populate_by_name": True}
+
+
+class EnrichedComments(BaseModel):
+    new: list[CommentCapture] = Field(default_factory=list)
+    existing: list[CommentCapture] = Field(default_factory=list)
+    todos: list[TodoCapture] = Field(default_factory=list)
+
+
+class RecentCommit(BaseModel):
+    hash: str = ""
+    message: str = ""
+    files_changed: list[str] = Field(default_factory=list, alias="filesChanged")
+    timestamp: int = 0
+    author: str = ""
+
+    model_config = {"populate_by_name": True}
+
+
+class DiffStats(BaseModel):
+    files_modified: int = Field(0, alias="filesModified")
+    insertions: int = 0
+    deletions: int = 0
+    changed_files: list[str] = Field(default_factory=list, alias="changedFiles")
+
+    model_config = {"populate_by_name": True}
+
+
+class DiagnosticsSnapshot(BaseModel):
+    errors: int = 0
+    warnings: int = 0
+    error_messages: list[str] = Field(default_factory=list, alias="errorMessages")
+
+    model_config = {"populate_by_name": True}
+
+
+class ExtensionSignals(BaseModel):
+    debug_session_active: bool = Field(False, alias="debugSessionActive")
+    debug_adapter_type: str = Field("none", alias="debugAdapterType")
+    breakpoint_count: int = Field(0, alias="breakpointCount")
+    test_runner_active: bool = Field(False, alias="testRunnerActive")
+    active_terminal_count: int = Field(0, alias="activeTerminalCount")
+
+    model_config = {"populate_by_name": True}
+
+
+class SearchQueryCapture(BaseModel):
+    query: str = ""
+    results: int = 0
+    file_types: list[str] = Field(default_factory=list, alias="fileTypes")
+
+    model_config = {"populate_by_name": True}
+
+
+class ImportChanges(BaseModel):
+    added: list[str] = Field(default_factory=list)
+    removed: list[str] = Field(default_factory=list)
+
+
+class FunctionSignatures(BaseModel):
+    changed: list[str] = Field(default_factory=list)
+    added: list[str] = Field(default_factory=list)
+    removed: list[str] = Field(default_factory=list)
+
+
+class TestResults(BaseModel):
+    passed: int = 0
+    failed: int = 0
+    skipped: int = 0
+    duration: int = 0
+
+
+class EnrichedSnapshot(BaseModel):
+    comments: EnrichedComments = Field(default_factory=EnrichedComments)
+    recent_commits: list[RecentCommit] = Field(default_factory=list, alias="recentCommits")
+    diff_stats: DiffStats = Field(default_factory=DiffStats, alias="diffStats")
+    diagnostics: DiagnosticsSnapshot = Field(default_factory=DiagnosticsSnapshot)
+    extension_signals: ExtensionSignals = Field(default_factory=ExtensionSignals, alias="extensionSignals")
+    search_queries: list[SearchQueryCapture] = Field(default_factory=list, alias="searchQueries")
+    import_changes: ImportChanges = Field(default_factory=ImportChanges, alias="importChanges")
+    function_signatures: FunctionSignatures = Field(default_factory=FunctionSignatures, alias="functionSignatures")
+    test_results: TestResults | None = Field(None, alias="testResults")
 
     model_config = {"populate_by_name": True}
 
@@ -88,6 +191,31 @@ class ResurrectionResponse(BaseModel):
     commands: list[ResurrectionCommand]
     impact_analysis: SafetyReport | None = None
     plan_summary: str | None = Field(None, alias="planSummary")
+
+
+# ── Retroactive Git Ingestion ───────────────────────────────
+
+class RetroIngestRequest(BaseModel):
+    repo_path: str | None = Field(None, alias="repoPath")
+    max_commits: int = Field(120, alias="maxCommits")
+    max_pull_requests: int = Field(30, alias="maxPullRequests")
+    include_pull_requests: bool = Field(True, alias="includePullRequests")
+
+    model_config = {"populate_by_name": True}
+
+
+class RetroIngestResponse(BaseModel):
+    status: str
+    repo: str
+    branch: str
+    ingested_count: int = Field(alias="ingestedCount")
+    commit_count: int = Field(alias="commitCount")
+    pr_count: int = Field(alias="prCount")
+    comment_count: int = Field(alias="commentCount")
+    skipped_count: int = Field(alias="skippedCount")
+    warnings: list[str] = Field(default_factory=list)
+
+    model_config = {"populate_by_name": True}
 
 
 # ── Decision Archaeology ───────────────────────────────────────

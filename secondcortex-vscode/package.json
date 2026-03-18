@@ -57,6 +57,10 @@
         "title": "SecondCortex: Ask a Question"
       },
       {
+        "command": "secondcortex.ingestGitHistory",
+        "title": "SecondCortex: Ingest Git History"
+      },
+      {
         "command": "secondcortex.toggleCapture",
         "title": "SecondCortex: Toggle Context Capture"
       },

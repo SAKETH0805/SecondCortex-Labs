@@ -92,7 +92,7 @@ class VectorDBService:
                 "entities": ",".join(snapshot.metadata.entities) if snapshot.metadata and snapshot.metadata.entities else "",
             }
 
-            collection.add(
+            collection.upsert(
                 ids=[str(snapshot.id)],
                 embeddings=[snapshot.embedding or []],
                 metadatas=[metadata],

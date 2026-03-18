@@ -16,6 +16,48 @@ let snapshotCache: SnapshotCache | undefined;
 let powerSyncClient: PowerSyncClient | undefined;
 let syncStatusBar: vscode.StatusBarItem | undefined;
 
+class CortexCliUriHandler implements vscode.UriHandler {
+    constructor(
+        private readonly backendClient: BackendClient,
+        private readonly resurrector: WorkspaceResurrector,
+        private readonly output: vscode.OutputChannel,
+    ) { }
+
+    async handleUri(uri: vscode.Uri): Promise<void> {
+        const route = uri.path.replace(/^\/+/, '').trim().toLowerCase();
+        const params = new URLSearchParams(uri.query || '');
+        const rawQuery = (uri.query || '').trim();
+        const positional = rawQuery && !rawQuery.includes('=') ? decodeURIComponent(rawQuery) : '';
+
+        this.output.appendLine(`[SecondCortex] URI command received route='${route}' query='${uri.query}'`);
+
+        if (route === 'resurrect') {
+            const target = params.get('target') || positional || 'latest';
+            const currentWorkspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            await this.resurrector.executeFromQuery(target, this.backendClient, currentWorkspace);
+            return;
+        }
+
+        if (route === 'ingest') {
+            const repoPath = params.get('repoPath') || params.get('repo') || positional || undefined;
+            const maxCommits = Number.parseInt(params.get('maxCommits') || '120', 10);
+            const maxPullRequests = Number.parseInt(params.get('maxPullRequests') || '30', 10);
+            const includePullRequests = (params.get('includePullRequests') || 'true').toLowerCase() !== 'false';
+
+            await vscode.commands.executeCommand('secondcortex.ingestGitHistory', {
+                repoPath,
+                maxCommits,
+                maxPullRequests,
+                includePullRequests,
+                silent: true,
+            });
+            return;
+        }
+
+        vscode.window.showWarningMessage(`SecondCortex: Unknown URI command '${route}'.`);
+    }
+}
+
 function renderSyncStatus(status: SyncStatus): void {
     if (!syncStatusBar) {
         return;
@@ -69,6 +111,7 @@ export function activate(context: vscode.ExtensionContext) {
     powerSyncClient = new PowerSyncClient(context.globalStorageUri.fsPath, backendClient, outputChannel, renderSyncStatus);
     const resurrector = new WorkspaceResurrector(outputChannel);
     const shadowGraphPanel = new ShadowGraphPanel(backendClient, resurrector, outputChannel, frontendUrl);
+    const cliUriHandler = new CortexCliUriHandler(backendClient, resurrector, outputChannel);
 
     // ── Data Capture ───────────────────────────────────────────────
     eventCapture = new EventCapture(debouncer, firewall, snapshotCache, powerSyncClient, backendClient, authService, outputChannel);
@@ -114,6 +157,56 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     context.subscriptions.push(
+        vscode.commands.registerCommand('secondcortex.ingestGitHistory', async (options?: {
+            repoPath?: string;
+            maxCommits?: number;
+            maxPullRequests?: number;
+            includePullRequests?: boolean;
+            silent?: boolean;
+        }) => {
+            const defaultWorkspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            const resolvedRepo = options?.repoPath ?? await vscode.window.showInputBox({
+                prompt: 'Repository path to retroactively ingest (leave empty for current workspace)',
+                placeHolder: defaultWorkspace || 'C:/path/to/repo',
+                value: defaultWorkspace || '',
+            });
+
+            if (resolvedRepo === undefined) {
+                return;
+            }
+
+            const payload = {
+                repoPath: resolvedRepo || defaultWorkspace,
+                maxCommits: options?.maxCommits ?? 120,
+                maxPullRequests: options?.maxPullRequests ?? 30,
+                includePullRequests: options?.includePullRequests ?? true,
+            };
+
+            const result = await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'SecondCortex: Retroactively ingesting git history...',
+                    cancellable: false,
+                },
+                async () => backendClient.ingestGitHistory(payload),
+            );
+
+            if (!result) {
+                vscode.window.showErrorMessage('SecondCortex: Git ingest failed. Check output logs for details.');
+                return;
+            }
+
+            const warningText = result.warnings?.length ? ` Warnings: ${result.warnings.join(' | ')}` : '';
+            const summary = `Ingested ${result.ingestedCount} records (${result.commitCount} commits, ${result.prCount} PRs, ${result.commentCount} comments) from ${result.repo}.`;
+            outputChannel.appendLine(`[SecondCortex] ${summary}${warningText}`);
+
+            if (!options?.silent) {
+                vscode.window.showInformationMessage(`SecondCortex: ${summary}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
         vscode.commands.registerCommand('secondcortex.askQuestion', async () => {
             const question = await vscode.window.showInputBox({
                 prompt: 'Ask SecondCortex a question about your project history',
@@ -126,6 +219,8 @@ export function activate(context: vscode.ExtensionContext) {
             }
         })
     );
+
+    context.subscriptions.push(vscode.window.registerUriHandler(cliUriHandler));
 
     context.subscriptions.push(
         vscode.commands.registerCommand('secondcortex.openShadowGraph', async () => {

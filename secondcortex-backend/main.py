@@ -4,6 +4,7 @@ SecondCortex Backend — FastAPI Main Server
 Endpoints:
   POST /api/v1/auth/signup  — Create a new account.
   POST /api/v1/auth/login   — Log in and get a JWT token.
+    POST /api/v1/ingest/git   — Retroactively ingest git history into memory.
   POST /api/v1/snapshot     — Receives sanitized IDE snapshots.
   POST /api/v1/query        — User question → Planner → Executor pipeline.
   POST /api/v1/resurrect    — Generate resurrection commands.
@@ -19,7 +20,7 @@ import json
 import time
 import jwt
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 # ── Force Python to see the local directories (fixes Azure ModuleNotFoundError) ──────────
@@ -60,10 +61,17 @@ from models.schemas import (
     ArchaeologyResponse,
     ChatMessage,
     ChatHistoryResponse,
+    MemoryMetadata,
+    MemoryOperation,
+    StoredSnapshot,
+    RetroIngestRequest,
+    RetroIngestResponse,
+    EnrichedSnapshot,
 )
 from auth.routes import user_db
 from services.vector_db import VectorDBService
 from services.llm_client import create_llm_client, create_async_llm_client, get_chat_model
+from services.git_ingest import RetroGitIngestionService
 from pydantic import BaseModel, Field
 
 SYNC_TOKEN_EXPIRY_SECONDS = 3600
@@ -78,6 +86,7 @@ class SyncSnapshotRow(BaseModel):
     git_branch: str | None = None
     terminal_commands: str = "[]"
     summary: str = ""
+    enriched_context: str = "{}"
     timestamp: int
     synced: int = 0
 
@@ -146,6 +155,7 @@ executor = ExecutorAgent()
 simulator = SimulatorAgent()
 archaeology_llm_client = create_llm_client()
 archaeology_async_llm_client = create_async_llm_client()
+git_ingestion = RetroGitIngestionService()
 
 # Most recently received raw snapshot per user, updated immediately on /snapshot ingest.
 _latest_ingested_snapshot: dict[str, dict[str, Any]] = {}
@@ -183,12 +193,21 @@ def _snapshot_payload_from_sync_row(row: SyncSnapshotRow) -> SnapshotPayload:
             terminal_commands = []
 
     timestamp_dt = datetime.utcfromtimestamp(max(0, row.timestamp) / 1000)
+    shadow_graph = row.summary or "Synced snapshot"
+    if row.enriched_context and row.enriched_context.strip() not in ("", "{}"):
+        try:
+            parsed = json.loads(row.enriched_context)
+            normalized = EnrichedSnapshot.model_validate(parsed)
+            shadow_graph = normalized.model_dump_json(by_alias=True)
+        except Exception:
+            shadow_graph = row.enriched_context
+
     return SnapshotPayload(
         timestamp=timestamp_dt,
         workspaceFolder=row.workspace,
         activeFile=row.active_file,
         languageId="unknown",
-        shadowGraph=row.summary or "Synced snapshot",
+        shadowGraph=shadow_graph,
         gitBranch=row.git_branch,
         terminalCommands=terminal_commands,
     )
@@ -198,7 +217,7 @@ def _is_latest_snapshot_question(question: str) -> bool:
     q = (question or "").strip().lower()
     if not q:
         return False
-    has_recency = bool(re.search(r"\b(latest|newest|most recent|current|last|fetch latest)\b", q))
+    has_recency = bool(re.search(r"\b(latest|newest|most recent|recent|current|last|fetch latest)\b", q))
     has_context = bool(re.search(r"\b(snapshot|snapshots|timeline|context|edited|editing|file|commit|branch)\b", q))
     return has_recency and has_context
 
@@ -209,21 +228,65 @@ def _question_wants_main_branch(question: str) -> bool:
 
 
 def _build_latest_snapshot_summary(snapshot: dict, wants_main: bool) -> str:
-    ts = snapshot.get("timestamp", "unknown time")
+    ts = _format_snapshot_timestamp_with_timezone(snapshot.get("timestamp"))
     file_path = snapshot.get("active_file") or "an unknown file"
     branch = snapshot.get("git_branch") or "unknown"
-    summary = snapshot.get("summary") or "No summary available."
-
-    if wants_main:
-        return (
-            f"The latest snapshot on the main branch is from {ts}, "
-            f"editing {file_path}. Summary: {summary}"
-        )
-
-    return (
-        f"The latest snapshot is from {ts}, editing {file_path} on branch {branch}. "
-        f"Summary: {summary}"
+    work_context = _extract_work_context(snapshot)
+    scope = "Most recent main-branch snapshot:" if wants_main else "Most recent snapshot:"
+    return "\n".join(
+        [
+            scope,
+            f"- Work context: {work_context}",
+            f"- File: {file_path}",
+            f"- Branch: {branch}",
+            f"- Time: {ts}",
+        ]
     )
+
+
+def _extract_work_context(snapshot: dict) -> str:
+    for key in ("summary", "shadow_graph", "document"):
+        value = str(snapshot.get(key) or "").strip()
+        if value:
+            normalized = " ".join(value.split())
+            return normalized[:180]
+    return "No work context available."
+
+
+def _format_snapshot_timestamp_with_timezone(raw_timestamp: Any) -> str:
+    if raw_timestamp is None:
+        return "unknown time"
+
+    dt: datetime | None = None
+
+    if isinstance(raw_timestamp, (int, float)):
+        ts = float(raw_timestamp)
+        if ts > 1_000_000_000_000:
+            ts /= 1000.0
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    elif isinstance(raw_timestamp, str):
+        value = raw_timestamp.strip()
+        if not value:
+            return "unknown time"
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(value)
+        except Exception:
+            return str(raw_timestamp)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        return str(raw_timestamp)
+
+    tz_name = dt.tzname() or "UTC"
+    tz_offset = dt.strftime("%z")
+    if len(tz_offset) == 5:
+        tz_offset = f"{tz_offset[:3]}:{tz_offset[3:]}"
+    elif not tz_offset:
+        tz_offset = "+00:00"
+
+    return f"{dt.isoformat()} ({tz_name} {tz_offset})"
 
 
 def _get_timestamp_float(snapshot: dict | None) -> float:
@@ -548,6 +611,7 @@ async def put_sync_data(
             "git_branch": row.git_branch,
             "terminal_commands": row.terminal_commands,
             "summary": row.summary,
+            "enriched_context": row.enriched_context,
             "timestamp": row.timestamp,
             "synced": 1,
         }
@@ -638,6 +702,72 @@ async def receive_snapshot(
 
     background_tasks.add_task(retriever.process_snapshot, payload, user_id)
     return {"status": "accepted", "message": "Snapshot queued for processing."}
+
+
+@app.post("/api/v1/ingest/git", response_model=RetroIngestResponse)
+async def ingest_git_history(
+    request: RetroIngestRequest,
+    user_id: str = Depends(get_current_user),
+):
+    """
+    Retroactively ingest existing git history into user memory.
+    Includes commit messages/diffs/code comments and, when available, GitHub PR context.
+    """
+    logger.info(
+        "Retro ingest requested (user=%s, repo=%s, commits=%s, prs=%s)",
+        user_id,
+        request.repo_path,
+        request.max_commits,
+        request.max_pull_requests,
+    )
+
+    try:
+        records, summary = git_ingestion.mine(
+            repo_path=request.repo_path,
+            max_commits=request.max_commits,
+            max_pull_requests=request.max_pull_requests,
+            include_pull_requests=request.include_pull_requests,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Git ingest failed: {exc}")
+
+    ingested_count = 0
+    for record in records:
+        metadata = MemoryMetadata(
+            operation=MemoryOperation.ADD,
+            entities=[record.active_file, record.git_branch],
+            relations=[],
+            summary=record.summary,
+        )
+
+        stored = StoredSnapshot(
+            id=record.id,
+            timestamp=record.timestamp,
+            workspace_folder=record.workspace_folder,
+            active_file=record.active_file,
+            language_id=record.language_id,
+            shadow_graph=record.shadow_graph,
+            git_branch=record.git_branch,
+            terminal_commands=record.terminal_commands,
+            metadata=metadata,
+        )
+        stored.embedding = await vector_db.generate_embedding(
+            f"{record.summary}\n{record.shadow_graph[:4000]}"
+        )
+        await vector_db.upsert_snapshot(stored, user_id=user_id)
+        ingested_count += 1
+
+    return RetroIngestResponse(
+        status="ok",
+        repo=summary.repo,
+        branch=summary.branch,
+        ingestedCount=ingested_count,
+        commitCount=summary.commit_count,
+        prCount=summary.pr_count,
+        commentCount=summary.comment_count,
+        skippedCount=summary.skipped_count,
+        warnings=summary.warnings,
+    )
 
 
 @app.get("/api/v1/events")

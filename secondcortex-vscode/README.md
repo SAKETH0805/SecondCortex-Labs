@@ -36,6 +36,9 @@ MCP is served by the backend and exposes tools like `search_memory` for context 
 4. **Resurrect**: 
    - Type `/resurrect latest` in the SecondCortex Chat.
    - Or run `cortex resurrect latest` in your terminal.
+5. **Retroactive Ingest (Cold Start)**:
+   - Run `cortex ingest` to mine the current repo's git history.
+   - Or run `cortex ingest C:/path/to/repo` for a different local repo.
 
 ## 🔒 Privacy & Security
 

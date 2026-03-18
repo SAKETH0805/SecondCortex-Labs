@@ -108,12 +108,17 @@ class UserDB:
                     git_branch TEXT,
                     terminal_commands TEXT NOT NULL,
                     summary TEXT NOT NULL,
+                    enriched_context TEXT NOT NULL DEFAULT '{}',
                     timestamp INTEGER NOT NULL,
                     synced INTEGER NOT NULL DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id)
                 )
             """)
+            try:
+                conn.execute("ALTER TABLE synced_snapshots ADD COLUMN enriched_context TEXT NOT NULL DEFAULT '{}'")
+            except sqlite3.OperationalError:
+                pass
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_synced_snapshots_scope
                 ON synced_snapshots (team_id, user_id, timestamp DESC)
@@ -259,8 +264,8 @@ class UserDB:
                 """
                 INSERT INTO synced_snapshots (
                     id, user_id, team_id, workspace, active_file, git_branch,
-                    terminal_commands, summary, timestamp, synced
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    terminal_commands, summary, enriched_context, timestamp, synced
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     user_id=excluded.user_id,
                     team_id=excluded.team_id,
@@ -269,6 +274,7 @@ class UserDB:
                     git_branch=excluded.git_branch,
                     terminal_commands=excluded.terminal_commands,
                     summary=excluded.summary,
+                    enriched_context=excluded.enriched_context,
                     timestamp=excluded.timestamp,
                     synced=excluded.synced
                 """,
@@ -281,6 +287,7 @@ class UserDB:
                     row.get("git_branch"),
                     row.get("terminal_commands") or "[]",
                     row.get("summary") or "",
+                    row.get("enriched_context") or "{}",
                     int(row.get("timestamp") or 0),
                     int(row.get("synced") or 0),
                 ),
@@ -299,7 +306,7 @@ class UserDB:
                 cursor = conn.execute(
                     """
                     SELECT id, user_id, team_id, workspace, active_file, git_branch,
-                           terminal_commands, summary, timestamp, synced
+                              terminal_commands, summary, enriched_context, timestamp, synced
                     FROM synced_snapshots
                     WHERE user_id = ?
                     ORDER BY timestamp DESC
@@ -317,8 +324,9 @@ class UserDB:
                         "git_branch": row[5],
                         "terminal_commands": row[6],
                         "summary": row[7],
-                        "timestamp": row[8],
-                        "synced": row[9],
+                        "enriched_context": row[8],
+                        "timestamp": row[9],
+                        "synced": row[10],
                     })
 
         all_rows.sort(key=lambda r: int(r.get("timestamp") or 0), reverse=True)

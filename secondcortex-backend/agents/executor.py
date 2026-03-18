@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from datetime import datetime, timezone
+from typing import Any
 
 from agents.planner import PlanResult
 from models.schemas import QueryResponse, ResurrectionCommand
@@ -38,6 +41,12 @@ Respond with ONLY valid JSON (no markdown, no prose):
 
 Rules:
 - Summary: Answer FIRST sentence. Then optional bullets (- fact). Keep to <200 chars.
+- For recency questions (latest/newest/most recent/recent snapshot), prefer this exact structure:
+    Most recent snapshot:
+    - Work context: ...
+    - File: ...
+    - Branch: ...
+    - Time: ... (include timezone)
 - confidence: 0.0-1.0. Low confidence = be explicit about uncertainty.
 - reasoning_log: 2-3 short factual lines max.
 - commands: [] unless explicitly helpful (resurrect branch, open file).
@@ -87,6 +96,17 @@ class ExecutorAgent:
                 f"  Code: {str(ctx.get('shadow_graph', ''))[:500]}\n"
             )
         context_block = "\n".join(context_parts) if context_parts else "No relevant context found."
+
+        if _is_latest_lookup_question(question) and plan_result.retrieved_context:
+            latest = plan_result.retrieved_context[0]
+            return QueryResponse(
+                summary=_build_latest_snapshot_bullet_summary(latest),
+                reasoning_log=[
+                    "Detected recency query in executor and normalized response format.",
+                    f"Selected snapshot id={latest.get('id', 'unknown')} timestamp={latest.get('timestamp', 'unknown')}",
+                ],
+                commands=[],
+            )
 
         # ── Step 2: Draft the answer ─────────────────────────────
         draft = await self._generate_draft(question, context_block)
@@ -176,3 +196,68 @@ class ExecutorAgent:
         except Exception as exc:
             logger.error("Validator LLM call failed. Error: %s", exc, exc_info=True)
             return {"is_valid": True, "issues": [], "revised_confidence": 0.5}
+
+
+def _is_latest_lookup_question(question: str) -> bool:
+    q = (question or "").strip().lower()
+    if not q:
+        return False
+    has_recency = bool(re.search(r"\b(latest|newest|most recent|recent|current|last|fetch latest)\b", q))
+    has_snapshot_context = bool(re.search(r"\b(snapshot|snapshots|timeline|context|update|edited|editing|file|commit|branch)\b", q))
+    return has_recency and has_snapshot_context
+
+
+def _extract_work_context(snapshot: dict) -> str:
+    for key in ("summary", "shadow_graph", "document"):
+        value = str(snapshot.get(key) or "").strip()
+        if value:
+            normalized = " ".join(value.split())
+            return normalized[:180]
+    return "No work context available."
+
+
+def _format_snapshot_timestamp_with_timezone(raw_timestamp: Any) -> str:
+    if raw_timestamp is None:
+        return "unknown time"
+
+    dt: datetime | None = None
+    if isinstance(raw_timestamp, (int, float)):
+        ts = float(raw_timestamp)
+        if ts > 1_000_000_000_000:
+            ts /= 1000.0
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    elif isinstance(raw_timestamp, str):
+        value = raw_timestamp.strip()
+        if not value:
+            return "unknown time"
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(value)
+        except Exception:
+            return str(raw_timestamp)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        return str(raw_timestamp)
+
+    tz_name = dt.tzname() or "UTC"
+    tz_offset = dt.strftime("%z")
+    if len(tz_offset) == 5:
+        tz_offset = f"{tz_offset[:3]}:{tz_offset[3:]}"
+    elif not tz_offset:
+        tz_offset = "+00:00"
+
+    return f"{dt.isoformat()} ({tz_name} {tz_offset})"
+
+
+def _build_latest_snapshot_bullet_summary(snapshot: dict) -> str:
+    return "\n".join(
+        [
+            "Most recent snapshot:",
+            f"- Work context: {_extract_work_context(snapshot)}",
+            f"- File: {snapshot.get('active_file') or 'an unknown file'}",
+            f"- Branch: {snapshot.get('git_branch') or 'unknown'}",
+            f"- Time: {_format_snapshot_timestamp_with_timezone(snapshot.get('timestamp'))}",
+        ]
+    )
