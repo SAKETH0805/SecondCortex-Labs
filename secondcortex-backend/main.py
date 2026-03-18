@@ -52,6 +52,7 @@ from models.schemas import (
 )
 from auth.routes import user_db
 from services.vector_db import VectorDBService
+from services.compression import compress_memory
 
 # ── Logging setup ───────────────────────────────────────────────
 logging.basicConfig(
@@ -193,6 +194,7 @@ async def get_snapshot_timeline(
             "id": r.get("id"),
             "timestamp": r.get("timestamp"),
             "active_file": r.get("active_file"),
+            "language_id": r.get("language_id", ""),
             "git_branch": r.get("git_branch"),
             "summary": r.get("summary"),
             "entities": r.get("entities", "").split(",") if r.get("entities") else [],
@@ -349,6 +351,18 @@ async def handle_resurrection(
         impact_analysis=safety_report,
         plan_summary=response.summary
     )
+
+
+# ── Memory Compression ──────────────────────────────────────────
+
+@app.post("/api/v1/admin/compress")
+async def trigger_compression(
+    user_id: str = Depends(get_current_user),
+):
+    """Trigger memory compression (daily/weekly/feature summaries) for the current user."""
+    logger.info("Memory compression triggered for user=%s", user_id)
+    result = await compress_memory(user_id, vector_db)
+    return result
 
 
 # ── Run server ──────────────────────────────────────────────────

@@ -1,0 +1,131 @@
+#!/bin/bash
+
+# Create and enter the directory
+mkdir -p dummy-react-saas
+cd dummy-react-saas
+
+# Initialize Git
+git init
+git checkout -b main
+
+# 1. Main Branch Setup (The Foundation)
+mkdir -p src/components/Extension
+
+cat <<EOF > package.json
+{
+  "name": "dummy-react-saas",
+  "version": "0.1.0",
+  "dependencies": {
+    "react": "^18.2.0",
+    "lucide-react": "^0.284.0",
+    "clsx": "^2.0.0"
+  }
+}
+EOF
+
+cat <<EOF > src/App.tsx
+import React from 'react';
+import { ExtensionManager } from './components/Extension/ExtensionManager';
+
+const App = () => {
+  return (
+    <div className="min-h-screen bg-slate-50 p-8">
+      <header className="mb-8">
+        <h1 className="text-2xl font-bold text-slate-900">Developer Settings</h1>
+        <p className="text-slate-500">Manage your IDE integrations and context tracking.</p>
+      </header>
+      <ExtensionManager />
+    </div>
+  );
+};
+
+export default App;
+EOF
+
+cat <<EOF > src/components/Extension/ExtensionManager.tsx
+import React from 'react';
+
+export const ExtensionManager = () => {
+  return (
+    <div className="bg-white rounded-xl shadow-sm border p-6 max-w-2xl">
+      <h2 className="text-lg font-semibold mb-4">Installed Extensions</h2>
+      <div className="flex items-center justify-between p-4 border rounded-lg bg-indigo-50 border-indigo-100">
+        <div>
+          <p className="font-medium text-indigo-900">SecondCortex Labs</p>
+          <p className="text-sm text-indigo-700">Context Tracking & Secret Scrubbing Active</p>
+        </div>
+        <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+      </div>
+    </div>
+  );
+};
+EOF
+
+git add .
+git commit -m "Initial commit: Setup Extension Manager with SecondCortex integration"
+
+# 2. Feature Branch: The "Work-in-Progress" State
+git checkout -b feature/billing-dashboard
+mkdir -p src/components/Billing
+
+cat <<EOF > src/components/Billing/SubscriptionPlan.tsx
+import React, { useState, useEffect } from 'react';
+
+// TODO: Refactor this to use the new useBilling hook
+// I was thinking about moving the Stripe logic to a dedicated provider 
+// but got distracted by the 2 PM Sync Meeting...
+export const SubscriptionPlan = () => {
+  const [plans, setPlans] = useState([]);
+  const API_KEY = "sk_test_51MzXk0L2L4mN9qPQ000dummy_secret_key"; // SECOND-CORTEX SHOULD SCRUB THIS
+
+  useEffect(() => {
+    const fetchPlans = async () => {
+      // Logic for fetching plans starts here...
+      // ideology: we want to support seat-based pricing eventually
+    };
+    fetchPlans();
+  }, []);
+
+  return (
+    <div className="p-6 border rounded-xl bg-white">
+      <h2 className="text-xl font-semibold">Subscription Management</h2>
+      {/* Pending UI implementation for the pricing grid */}
+    </div>
+  );
+};
+EOF
+
+git add .
+git commit -m "feat: partial implementation of billing logic"
+
+# 3. Hotfix Branch: Navigation
+git checkout main
+git checkout -b hotfix/auth-nav-bug
+mkdir -p src/components/Navigation
+
+cat <<EOF > src/components/Navigation/TopBar.tsx
+import React from 'react';
+
+export const TopBar = () => {
+  // Fix for the JWT expiration bug discussed in Slack
+  const token = localStorage.getItem('session_token');
+  
+  return (
+    <nav className="h-16 border-b flex items-center px-4">
+      <span className="font-bold">SaaS Console</span>
+    </nav>
+  );
+};
+EOF
+
+git add .
+git commit -m "fix: temporary patch for navigation auth state"
+
+# 4. Final Demo State
+git checkout feature/billing-dashboard
+
+echo "------------------------------------------------"
+echo "DEMO READY: 'dummy-react-saas' created."
+echo "Current Branch: feature/billing-dashboard"
+echo "Context: SubscriptionPlan.tsx contains unscrubbed keys and 'ideology' comments."
+echo "------------------------------------------------"

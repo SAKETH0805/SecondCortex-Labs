@@ -1,10 +1,47 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+
+// ── Language color map for timeline dots ────────────────────────
+const LANG_COLORS: Record<string, string> = {
+    python: '#3572A5',
+    typescriptreact: '#f0c040',
+    typescript: '#3178c6',
+    javascript: '#f7df1e',
+    css: '#563d7c',
+    json: '#292929',
+    yaml: '#cb171e',
+    markdown: '#083fa1',
+    bat: '#C1F12E',
+    html: '#e34c26',
+};
+
+function getLangColor(langId: string): string {
+    return LANG_COLORS[langId?.toLowerCase()] || '#888';
+}
+
+function getLangLabel(langId: string): string {
+    const labels: Record<string, string> = {
+        python: 'Python',
+        typescriptreact: 'TSX',
+        typescript: 'TypeScript',
+        javascript: 'JavaScript',
+        css: 'CSS',
+        json: 'JSON',
+        yaml: 'YAML',
+        markdown: 'Markdown',
+        bat: 'Batch',
+        html: 'HTML',
+    };
+    return labels[langId?.toLowerCase()] || langId || 'Unknown';
+}
+
+// ── Types ───────────────────────────────────────────────────────
 
 interface DashboardProps {
     token: string;
     backendUrl?: string;
+    isDemoMode?: boolean;
 }
 
 interface Stats {
@@ -13,10 +50,25 @@ interface Stats {
     activeProject: string;
 }
 
+interface TimelineEvent {
+    id: string;
+    timestamp: string;
+    active_file: string;
+    language_id: string;
+    git_branch: string;
+    summary: string;
+    entities: string[];
+}
+
 export default function Dashboard({ 
     token, 
-    backendUrl = 'https://sc-backend-suhaan.azurewebsites.net' 
+    backendUrl: passedBackendUrl,
+    isDemoMode = false,
 }: DashboardProps) {
+    const backendUrl = passedBackendUrl || 
+                      process.env.NEXT_PUBLIC_BACKEND_URL || 
+                      (isDemoMode ? 'http://localhost:8000' : 'https://sc-backend-suhaan.azurewebsites.net');
+
     const [stats, setStats] = useState<Stats>({
         totalSnapshots: 0,
         lastSnapshotTime: null,
@@ -27,6 +79,12 @@ export default function Dashboard({
     const [showModal, setShowModal] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
+
+    // ── Timeline state ──────────────────────────────────────────
+    const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+    const [selectedEvent, setSelectedEvent] = useState<TimelineEvent | null>(null);
+    const [showTimelineDetail, setShowTimelineDetail] = useState(false);
+    const tourStartedRef = useRef(false);
 
     const fetchStats = useCallback(async () => {
         try {
@@ -42,12 +100,14 @@ export default function Dashboard({
                         totalSnapshots: data.timeline.length,
                         lastSnapshotTime: latest?.timestamp ?? null,
                     }));
+                    setTimeline(data.timeline);
                 } else {
                     setStats(prev => ({
                         ...prev,
                         totalSnapshots: 0,
                         lastSnapshotTime: null,
                     }));
+                    setTimeline([]);
                 }
             }
         } catch (err) {
@@ -73,10 +133,73 @@ export default function Dashboard({
 
     useEffect(() => {
         fetchStats();
-        fetchMcpKey();
+        if (!isDemoMode) {
+            fetchMcpKey();
+        }
         const intervalId = window.setInterval(fetchStats, 5000);
         return () => window.clearInterval(intervalId);
-    }, [fetchStats, fetchMcpKey]);
+    }, [fetchStats, fetchMcpKey, isDemoMode]);
+
+    // ── Onboarding Tour (driver.js) ─────────────────────────────
+    useEffect(() => {
+        if (!isDemoMode || tourStartedRef.current || timeline.length === 0) return;
+        tourStartedRef.current = true;
+
+        // Dynamically load driver.js to avoid SSR issues
+        import('driver.js').then(({ driver }) => {
+            import('driver.js/dist/driver.css');
+
+            const driverObj = driver({
+                showProgress: true,
+                animate: true,
+                overlayColor: 'rgba(0, 0, 0, 0.75)',
+                popoverClass: 'sc-tour-popover',
+                steps: [
+                    {
+                        element: '#sc-stats-grid',
+                        popover: {
+                            title: '📊 Your Memory Dashboard',
+                            description: 'These cards show your total context snapshots, active project, and MCP connection status — all in real time.',
+                            side: 'bottom' as const,
+                            align: 'center' as const,
+                        }
+                    },
+                    {
+                        element: '#sc-cortex-timeline',
+                        popover: {
+                            title: '🧠 Live Cortex Timeline',
+                            description: 'This is your coding day, visualized. Each dot is a snapshot — color-coded by language. Click any point to see what file you were editing, which branch, and the AI summary.',
+                            side: 'top' as const,
+                            align: 'center' as const,
+                        }
+                    },
+                    {
+                        element: '#sc-timeline-legend',
+                        popover: {
+                            title: '🎨 Language Legend',
+                            description: 'Quickly identify which languages you worked in. Python is blue, TypeScript is amber, CSS is purple, and more.',
+                            side: 'top' as const,
+                            align: 'center' as const,
+                        }
+                    },
+                    {
+                        element: '#sc-mcp-panel',
+                        popover: {
+                            title: '🔗 MCP Integration',
+                            description: 'Connect Claude Desktop, Cursor, or any MCP client to your context memory. Generate a unique API key and paste it into your config.',
+                            side: 'top' as const,
+                            align: 'center' as const,
+                        }
+                    },
+                ],
+            });
+
+            // Small delay to let the DOM render
+            setTimeout(() => driverObj.drive(), 800);
+        }).catch(err => {
+            console.warn('Tour library not available:', err);
+        });
+    }, [isDemoMode, timeline]);
 
     const handleGenerateKey = async () => {
         setIsGenerating(true);
@@ -107,6 +230,14 @@ export default function Dashboard({
         }
     };
 
+    const handleTimelineClick = (event: TimelineEvent) => {
+        setSelectedEvent(event);
+        setShowTimelineDetail(true);
+    };
+
+    // ── Derive unique languages for legend ──────────────────────
+    const uniqueLangs = Array.from(new Set(timeline.map(e => e.language_id).filter(Boolean)));
+
     return (
         <div className="sc-dashboard-wrap">
             <div className="sc-dashboard-inner">
@@ -116,7 +247,7 @@ export default function Dashboard({
                     <p className="section-desc">Manage your SecondCortex memory system and external MCP integrations.</p>
                 </div>
 
-                <div className="sc-stats-grid">
+                <div className="sc-stats-grid" id="sc-stats-grid">
                     <StatCard 
                         title="Memory Snapshots" 
                         value={stats.totalSnapshots.toString()} 
@@ -137,7 +268,62 @@ export default function Dashboard({
                     />
                 </div>
 
-                <div className="sc-dashboard-panel">
+                {/* ── Live Cortex Timeline ──────────────────────────────── */}
+                <div className="sc-timeline-section" id="sc-cortex-timeline">
+                    <div className="sc-section-header">
+                        <p className="section-label">Context Memory</p>
+                        <h2 className="section-title" style={{ fontSize: '1.3rem' }}>Live Cortex Timeline</h2>
+                        <p className="section-desc">Click any snapshot to see what you were working on.</p>
+                    </div>
+
+                    {timeline.length === 0 ? (
+                        <div className="sc-timeline-empty">
+                            <p>No snapshots yet. Start coding with the VS Code extension to see your timeline.</p>
+                        </div>
+                    ) : (
+                        <>
+                            <div className="sc-timeline-track">
+                                <div className="sc-timeline-line" />
+                                {timeline.map((event, idx) => {
+                                    const color = getLangColor(event.language_id);
+                                    const leftPercent = (idx / Math.max(timeline.length - 1, 1)) * 100;
+                                    return (
+                                        <button
+                                            key={event.id}
+                                            className="sc-timeline-dot"
+                                            style={{
+                                                left: `${leftPercent}%`,
+                                                backgroundColor: color,
+                                                boxShadow: `0 0 8px ${color}88`,
+                                            }}
+                                            title={`${event.active_file} (${getLangLabel(event.language_id)})`}
+                                            onClick={() => handleTimelineClick(event)}
+                                        />
+                                    );
+                                })}
+                            </div>
+
+                            {/* Time labels */}
+                            <div className="sc-timeline-labels">
+                                <span>{timeline[0]?.timestamp ? new Date(timeline[0].timestamp).toLocaleDateString() : ''}</span>
+                                <span>{timeline[timeline.length - 1]?.timestamp ? new Date(timeline[timeline.length - 1].timestamp).toLocaleDateString() : ''}</span>
+                            </div>
+
+                            {/* Language Legend */}
+                            <div className="sc-timeline-legend" id="sc-timeline-legend">
+                                {uniqueLangs.map(lang => (
+                                    <span key={lang} className="sc-legend-item">
+                                        <span className="sc-legend-dot" style={{ backgroundColor: getLangColor(lang) }} />
+                                        {getLangLabel(lang)}
+                                    </span>
+                                ))}
+                            </div>
+                        </>
+                    )}
+                </div>
+
+                {/* ── MCP Panel ─────────────────────────────────────────── */}
+                <div className="sc-dashboard-panel" id="sc-mcp-panel">
                     <div className="sc-dashboard-panel-inner">
                         <div className="sc-dashboard-text">
                             <h2 className="sc-dashboard-h2">
@@ -189,7 +375,67 @@ export default function Dashboard({
                 </div>
             </div>
 
-            {/* Modal */}
+            {/* ── Timeline Detail Modal ──────────────────────────────── */}
+            {showTimelineDetail && selectedEvent && (
+                <div className="sc-modal-wrap">
+                    <div className="sc-modal-backdrop" onClick={() => setShowTimelineDetail(false)} />
+                    <div className="sc-modal-card sc-timeline-modal">
+                        <div className="sc-modal-stack">
+                            <div className="sc-modal-head">
+                                <div
+                                    className="sc-timeline-modal-dot"
+                                    style={{ backgroundColor: getLangColor(selectedEvent.language_id) }}
+                                />
+                                <h3 className="sc-modal-title">Snapshot Detail</h3>
+                                <p className="sc-modal-sub">
+                                    {new Date(selectedEvent.timestamp).toLocaleString()}
+                                </p>
+                            </div>
+
+                            <div className="sc-timeline-detail-grid">
+                                <div className="sc-detail-row">
+                                    <span className="sc-detail-label">File</span>
+                                    <span className="sc-detail-value">{selectedEvent.active_file}</span>
+                                </div>
+                                <div className="sc-detail-row">
+                                    <span className="sc-detail-label">Language</span>
+                                    <span className="sc-detail-value">
+                                        <span className="sc-legend-dot" style={{ backgroundColor: getLangColor(selectedEvent.language_id) }} />
+                                        {getLangLabel(selectedEvent.language_id)}
+                                    </span>
+                                </div>
+                                <div className="sc-detail-row">
+                                    <span className="sc-detail-label">Branch</span>
+                                    <span className="sc-detail-value sc-branch-tag">{selectedEvent.git_branch || 'N/A'}</span>
+                                </div>
+                                <div className="sc-detail-row">
+                                    <span className="sc-detail-label">AI Summary</span>
+                                    <span className="sc-detail-value">{selectedEvent.summary || 'No summary available.'}</span>
+                                </div>
+                                {selectedEvent.entities?.length > 0 && (
+                                    <div className="sc-detail-row">
+                                        <span className="sc-detail-label">Entities</span>
+                                        <span className="sc-detail-value sc-entities">
+                                            {selectedEvent.entities.map((e, i) => (
+                                                <span key={i} className="sc-entity-chip">{e}</span>
+                                            ))}
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
+
+                            <button 
+                                onClick={() => setShowTimelineDetail(false)}
+                                className="btn-primary sc-modal-close"
+                            >
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── MCP Key Modal ──────────────────────────────────────── */}
             {showModal && (
                 <div className="sc-modal-wrap">
                     <div className="sc-modal-backdrop" onClick={() => setShowModal(false)} />
@@ -230,6 +476,148 @@ export default function Dashboard({
                     </div>
                 </div>
             )}
+
+            {/* ── Timeline + Tour Styles ──────────────────────────────── */}
+            <style jsx>{`
+                .sc-timeline-section {
+                    margin: 2rem 0;
+                    padding: 1.5rem;
+                    background: rgba(255,255,255,0.03);
+                    border: 1px solid rgba(255,255,255,0.06);
+                    border-radius: 12px;
+                }
+                .sc-timeline-track {
+                    position: relative;
+                    height: 60px;
+                    margin: 1.5rem 20px 0.5rem;
+                }
+                .sc-timeline-line {
+                    position: absolute;
+                    top: 50%;
+                    left: 0;
+                    right: 0;
+                    height: 2px;
+                    background: linear-gradient(90deg, rgba(255,255,255,0.05), rgba(255,255,255,0.15), rgba(255,255,255,0.05));
+                    transform: translateY(-50%);
+                }
+                .sc-timeline-dot {
+                    position: absolute;
+                    top: 50%;
+                    width: 14px;
+                    height: 14px;
+                    border-radius: 50%;
+                    border: 2px solid rgba(255,255,255,0.2);
+                    transform: translate(-50%, -50%);
+                    cursor: pointer;
+                    transition: all 0.2s ease;
+                    z-index: 2;
+                    padding: 0;
+                }
+                .sc-timeline-dot:hover {
+                    transform: translate(-50%, -50%) scale(1.6);
+                    border-color: rgba(255,255,255,0.6);
+                    z-index: 10;
+                }
+                .sc-timeline-labels {
+                    display: flex;
+                    justify-content: space-between;
+                    padding: 0 16px;
+                    font-size: 0.7rem;
+                    color: rgba(255,255,255,0.35);
+                    font-family: 'JetBrains Mono', monospace;
+                }
+                .sc-timeline-legend {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 12px;
+                    margin-top: 1rem;
+                    padding-top: 0.75rem;
+                    border-top: 1px solid rgba(255,255,255,0.05);
+                }
+                .sc-legend-item {
+                    display: flex;
+                    align-items: center;
+                    gap: 5px;
+                    font-size: 0.72rem;
+                    color: rgba(255,255,255,0.5);
+                    font-family: 'JetBrains Mono', monospace;
+                }
+                .sc-legend-dot {
+                    display: inline-block;
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 50%;
+                    flex-shrink: 0;
+                }
+                .sc-timeline-empty {
+                    text-align: center;
+                    padding: 2rem;
+                    color: rgba(255,255,255,0.3);
+                    font-size: 0.85rem;
+                }
+                /* Timeline detail modal */
+                .sc-timeline-modal {
+                    max-width: 480px;
+                }
+                .sc-timeline-modal-dot {
+                    width: 20px;
+                    height: 20px;
+                    border-radius: 50%;
+                    margin-bottom: 8px;
+                    box-shadow: 0 0 12px currentColor;
+                }
+                .sc-timeline-detail-grid {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                    padding: 0.75rem 0;
+                }
+                .sc-detail-row {
+                    display: flex;
+                    gap: 12px;
+                    align-items: flex-start;
+                }
+                .sc-detail-label {
+                    flex-shrink: 0;
+                    width: 80px;
+                    font-size: 0.7rem;
+                    font-weight: 600;
+                    text-transform: uppercase;
+                    letter-spacing: 0.5px;
+                    color: rgba(255,255,255,0.4);
+                    padding-top: 2px;
+                }
+                .sc-detail-value {
+                    font-size: 0.82rem;
+                    color: rgba(255,255,255,0.85);
+                    word-break: break-all;
+                    display: flex;
+                    align-items: center;
+                    gap: 5px;
+                    flex-wrap: wrap;
+                }
+                .sc-branch-tag {
+                    background: rgba(255,255,255,0.08);
+                    padding: 2px 8px;
+                    border-radius: 4px;
+                    font-family: 'JetBrains Mono', monospace;
+                    font-size: 0.75rem;
+                }
+                .sc-entities {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 4px;
+                }
+                .sc-entity-chip {
+                    background: rgba(0, 255, 200, 0.1);
+                    border: 1px solid rgba(0, 255, 200, 0.2);
+                    padding: 1px 7px;
+                    border-radius: 4px;
+                    font-size: 0.7rem;
+                    color: rgba(0, 255, 200, 0.8);
+                    font-family: 'JetBrains Mono', monospace;
+                }
+            `}</style>
         </div>
     );
 }
@@ -291,3 +679,4 @@ function StatCard({ title, value, subtitle, icon }: { title: string, value: stri
         </div>
     );
 }
+
