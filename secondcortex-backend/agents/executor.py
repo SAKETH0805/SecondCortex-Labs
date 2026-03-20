@@ -94,6 +94,14 @@ class ExecutorAgent:
         # ── Step 2: Draft the answer ─────────────────────────────
         draft = await self._generate_draft(question, context_block)
 
+        # Ensure summary is always a string (LLM may return list/dict)
+        summary_raw = draft.get("summary", "I could not determine a clear answer.")
+        if isinstance(summary_raw, list):
+            summary_raw = " ".join(str(s) for s in summary_raw)
+        elif not isinstance(summary_raw, str):
+            summary_raw = str(summary_raw)
+        summary_raw = _sanitize_summary_text(summary_raw)
+
         # ── Step 3: Internal Validation Loop (disabled to save API quota) ──
         confidence = draft.get("confidence", 0.5)
         if ENABLE_VALIDATION:
@@ -129,7 +137,7 @@ class ExecutorAgent:
                 logger.warning("Skipping malformed command %s: %s", cmd, cmd_exc)
 
         return QueryResponse(
-            summary=draft.get("summary", "I could not determine a clear answer."),
+            summary=summary_raw,
             reasoning_log=reasoning_log,
             commands=commands,
         )
