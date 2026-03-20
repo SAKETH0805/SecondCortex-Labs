@@ -72,3 +72,17 @@ secondcortex-landing (2).html
 auth.db
 CODEBASE_ANALYSIS.md
 design.md
+
+# Legacy Root-Level Artifacts (Local Only)
+/Second Cortex Labs.docx
+/SecondCortex Supporting Artifacts.docx
+/SecondCortex.pdf
+/SecondCortexArchitecture.docx
+/SecondCortex_NewFeatures.txt
+/You*next_*/
+/claude_desktop_config.json
+/package.json
+/package-lock.json
+/public/index.html
+/secondcortex-backend/scripts/seed_demo.py
+/Fake_env_codebase/
