@@ -19,8 +19,7 @@ from typing import Any
 
 from agents.planner import PlanResult
 from models.schemas import QueryResponse, ResurrectionCommand
-from services.llm_client import create_groq_client, get_groq_model
-from services.rate_limiter import rate_limited_call
+from services.llm_client import task_chat_completion
 
 logger = logging.getLogger("secondcortex.executor")
 
@@ -73,7 +72,7 @@ class ExecutorAgent:
     """Synthesizes answers and validates them internally."""
 
     def __init__(self) -> None:
-        self.client = create_groq_client()
+        pass
 
     async def synthesize(self, question: str, plan_result: PlanResult) -> QueryResponse:
         """
@@ -155,9 +154,8 @@ class ExecutorAgent:
     async def _generate_draft(self, question: str, context: str) -> dict:
         """Call LLM to draft the answer."""
         try:
-            response = await rate_limited_call(
-                self.client.chat.completions.create,
-                model=get_groq_model(),
+            response = await task_chat_completion(
+                task="executor",
                 messages=[
                     {"role": "system", "content": EXECUTOR_SYSTEM_PROMPT},
                     {"role": "user", "content": f"Question: {question}\n\nRetrieved Context:\n{context}"},
@@ -174,9 +172,8 @@ class ExecutorAgent:
     async def _validate_draft(self, question: str, draft: dict, context: str) -> dict:
         """Internal Validation Loop — checks draft against the evidence."""
         try:
-            response = await rate_limited_call(
-                self.client.chat.completions.create,
-                model=get_groq_model(),
+            response = await task_chat_completion(
+                task="executor",
                 messages=[
                     {"role": "system", "content": VALIDATION_PROMPT},
                     {

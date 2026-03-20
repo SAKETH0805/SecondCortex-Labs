@@ -66,7 +66,7 @@ from models.schemas import (
 )
 from auth.routes import user_db
 from services.vector_db import VectorDBService
-from services.llm_client import create_llm_client, create_async_llm_client, get_chat_model
+from services.llm_client import task_chat_completion, validate_llm_configuration
 from services.git_ingest import RetroGitIngestionService
 
 # ── Logging setup ───────────────────────────────────────────────
@@ -93,6 +93,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def validate_startup_llm_config() -> None:
+    errors = validate_llm_configuration()
+    if errors:
+        message = " | ".join(errors)
+        logger.error("LLM startup validation failed: %s", message)
+        raise RuntimeError(f"Invalid LLM configuration: {message}")
+    logger.info("LLM startup validation passed.")
 
 
 @app.exception_handler(Exception)
@@ -128,8 +138,6 @@ retriever = RetrieverAgent(vector_db)
 planner = PlannerAgent(vector_db)
 executor = ExecutorAgent()
 simulator = SimulatorAgent()
-archaeology_llm_client = create_llm_client()
-archaeology_async_llm_client = create_async_llm_client()
 git_ingestion = RetroGitIngestionService()
 
 
@@ -225,8 +233,8 @@ Workspace snapshots:
 
     # Keep synthesis bounded to avoid API gateway timeouts during hover requests.
     response = await asyncio.wait_for(
-        archaeology_async_llm_client.chat.completions.create(
-            model=get_chat_model(),
+        task_chat_completion(
+            task="archaeology",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=150,
             temperature=0.2,
@@ -658,12 +666,12 @@ async def handle_query(
         err = traceback.format_exc()
         exc_str = str(exc)
 
-        # Handle Gemini 429 rate limit errors gracefully
+        # Handle provider rate limit errors gracefully
         if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str:
             logger.warning("QUERY RATE LIMITED: %s", exc_str[:200])
             raise HTTPException(
                 status_code=429,
-                detail="Rate limit reached. The Gemini API free tier quota has been exhausted. Please wait a minute and try again."
+                detail="Rate limit reached for the configured LLM provider. Please wait a minute and try again."
             )
 
         logger.error("QUERY PIPELINE CRASH: %s\n%s", exc, err)

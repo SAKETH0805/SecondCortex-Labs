@@ -13,10 +13,8 @@ from __future__ import annotations
 import json
 import logging
 
-from config import settings
 from services.vector_db import VectorDBService
-from services.llm_client import create_groq_client, get_groq_model
-from services.rate_limiter import rate_limited_call
+from services.llm_client import task_chat_completion
 
 logger = logging.getLogger("secondcortex.planner")
 
@@ -46,7 +44,6 @@ class PlannerAgent:
 
     def __init__(self, vector_db: VectorDBService) -> None:
         self.vector_db = vector_db
-        self.client = create_groq_client()
 
     async def plan(self, question: str, user_id: str | None = None) -> PlanResult:
         """
@@ -88,9 +85,8 @@ class PlannerAgent:
     async def _generate_plan(self, question: str) -> dict:
         """Call GPT-4o to decompose the question into search tasks."""
         try:
-            response = await rate_limited_call(
-                self.client.chat.completions.create,
-                model=get_groq_model(),
+            response = await task_chat_completion(
+                task="planner",
                 messages=[
                     {"role": "system", "content": PLANNER_SYSTEM_PROMPT},
                     {"role": "user", "content": question},
@@ -101,8 +97,11 @@ class PlannerAgent:
             raw = response.choices[0].message.content or "{}"
             return json.loads(raw)
         except Exception as exc:
-            logger.error("LLM Error during plan generation model=%s endpoint=%s",
-                         get_groq_model(), settings.groq_endpoint, exc, exc_info=True)
+            logger.error(
+                "LLM Error during planner route generation: %s",
+                exc,
+                exc_info=True,
+            )
             return {"intent": f"Planner Error: {str(exc)}", "search_queries": [question], "temporal_scope": "all_time"}
 
 

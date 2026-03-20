@@ -17,8 +17,7 @@ from typing import Any
 import chromadb
 
 from config import settings
-from services.llm_client import create_llm_client, get_embedding_model
-from services.rate_limiter import rate_limited_call
+from services.llm_client import task_embedding_create
 
 logger = logging.getLogger("secondcortex.vectordb")
 
@@ -27,8 +26,6 @@ class VectorDBService:
     """Manages LLM embeddings and ChromaDB operations with per-user isolation."""
 
     def __init__(self) -> None:
-        self.openai_client = create_llm_client()
-
         # Initialize ChromaDB client with configurable persistent path
         try:
             db_path = settings.chroma_db_path
@@ -83,9 +80,8 @@ class VectorDBService:
     async def generate_embedding(self, text: str) -> list[float]:
         """Generate a text embedding. Routes through the primary OpenAI/GitHub Models client."""
         try:
-            response = await rate_limited_call(
-                self.openai_client.embeddings.create,
-                model=get_embedding_model(),
+            response = await task_embedding_create(
+                task="embeddings",
                 input=text[:8000],
             )
             return response.data[0].embedding
