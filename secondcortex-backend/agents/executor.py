@@ -78,19 +78,6 @@ class ExecutorAgent:
         """
         logger.info("Synthesizing answer for: %s", question)
 
-        # Fast deterministic path for latest-snapshot list queries.
-        # This avoids LLM latency/timeouts and prevents rigid template regressions.
-        if _is_latest_snapshot_plan(plan_result):
-            summary = _build_recent_snapshots_plain_summary(plan_result.retrieved_context)
-            return QueryResponse(
-                summary=summary,
-                reasoning_log=[
-                    "Used timeline-based fast path for latest snapshot query.",
-                    f"Returned {len(plan_result.retrieved_context)} snapshot(s) without LLM synthesis.",
-                ],
-                commands=[],
-            )
-
         # ── Step 1: Build context string from retrieved snapshots ─
         context_parts: list[str] = []
         for i, ctx in enumerate(plan_result.retrieved_context[:10]):
@@ -200,37 +187,16 @@ def _sanitize_summary_text(summary: str) -> str:
     lower = text.lower()
 
     # Guardrail for legacy rigid formatting that users found unhelpful.
-    if lower.startswith("most recent snapshot"):
+    if "most recent snapshot" in lower:
         lines = [line.strip(" -\t") for line in text.splitlines() if line.strip()]
         details: list[str] = []
         for line in lines[1:]:
             if ":" in line:
                 details.append(line)
         if details:
-            return "Latest snapshot details: " + "; ".join(details)
-        return "Latest snapshot found."
+            return "Recent snapshot context: " + "; ".join(details)
+        return "Recent snapshot context found."
 
     return text
 
 
-def _is_latest_snapshot_plan(plan_result: PlanResult) -> bool:
-    if not plan_result.search_queries:
-        return False
-    first_query = str(plan_result.search_queries[0] or "").strip().lower()
-    return first_query.startswith("latest_") and first_query.endswith("_snapshots")
-
-
-def _build_recent_snapshots_plain_summary(snapshots: list[dict]) -> str:
-    if not snapshots:
-        return "No snapshots found yet."
-
-    lines = ["Latest snapshots:"]
-    for idx, snapshot in enumerate(snapshots[:10], start=1):
-        active_file = snapshot.get("active_file") or "unknown file"
-        git_branch = snapshot.get("git_branch") or "unknown branch"
-        timestamp = snapshot.get("timestamp") or "unknown time"
-        summary = str(snapshot.get("summary") or "No summary available").strip()
-        lines.append(
-            f"{idx}. {active_file} on {git_branch} at {timestamp} — {summary}"
-        )
-    return "\n".join(lines)
