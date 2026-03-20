@@ -13,16 +13,50 @@ import { registerDecisionArchaeology } from './decision/decisionHover';
 let eventCapture: EventCapture | undefined;
 let snapshotCache: SnapshotCache | undefined;
 
+function resolveConfiguredUrl(
+    config: vscode.WorkspaceConfiguration,
+    key: 'backendUrl' | 'frontendUrl',
+    fallback: string,
+    output: vscode.OutputChannel
+): string {
+    const rawValue = (config.get<string>(key, fallback) || '').trim();
+    try {
+        const parsed = new URL(rawValue);
+        if (!/^https?:$/.test(parsed.protocol)) {
+            throw new Error('Protocol must be http or https');
+        }
+        if (parsed.hostname.includes('_')) {
+            throw new Error('Hostname cannot include underscore');
+        }
+        return parsed.toString().replace(/\/$/, '');
+    } catch {
+        output.appendLine(`[SecondCortex] Invalid secondcortex.${key} value: "${rawValue}". Falling back to default: ${fallback}`);
+        return fallback;
+    }
+}
+
 export function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('SecondCortex');
     outputChannel.appendLine('[SecondCortex] Extension activating...');
 
     // Configuration
     const config = vscode.workspace.getConfiguration('secondcortex');
-    const backendUrl = config.get<string>('backendUrl', 'https://sc-backend-suhaan.azurewebsites.net');
-    const frontendUrl = config.get<string>('frontendUrl', 'https://sc-frontend-suhaan.azurewebsites.net');
+    const backendUrl = resolveConfiguredUrl(
+        config,
+        'backendUrl',
+        'https://sc-backend-suhaan.azurewebsites.net',
+        outputChannel
+    );
+    const frontendUrl = resolveConfiguredUrl(
+        config,
+        'frontendUrl',
+        'https://sc-frontend-suhaan.azurewebsites.net',
+        outputChannel
+    );
     const debouncerDelayMs = config.get<number>('debouncerDelayMs', 30000);
     const noiseThresholdMs = config.get<number>('noiseThresholdMs', 10000);
+    outputChannel.appendLine(`[SecondCortex] Using backend URL: ${backendUrl}`);
+    outputChannel.appendLine(`[SecondCortex] Using frontend URL: ${frontendUrl}`);
 
     // Auth
     const authService = new AuthService(context.secrets, outputChannel, backendUrl);
