@@ -31,6 +31,10 @@ It consists of:
 - Cortex as a Service (MCP): query private developer memory from external AI clients
 - Sidebar Chat with session history and new chat
 - Shadow Graph visualization panel
+- Shadow Graph timeline time-travel with snapshot lookup/restore workflow
+- Decision Archaeology hover (function-level historical reasoning from git + snapshot context)
+- Retro Git Ingestion (commits, diffs, comments, optional PR context)
+- Activity Lookup fast-path ("what am I working on?" queries from latest snapshot)
 - Secure auth token handling via VS Code SecretStorage
 - Command Palette + CLI-style workflows
 
@@ -65,19 +69,55 @@ Backend configuration is loaded from `secondcortex-backend/config.py`.
 Minimum useful variables:
 
 ```env
-# Choose provider
-LLM_PROVIDER=github_models
+# Task-aware provider routing (global default + optional task overrides)
+LLM_PROVIDER_DEFAULT=azure_openai
+# LLM_PROVIDER_RETRIEVER=azure_openai
+# LLM_PROVIDER_PLANNER=azure_openai
+# LLM_PROVIDER_EXECUTOR=azure_openai
+# LLM_PROVIDER_SIMULATOR=azure_openai
+# LLM_PROVIDER_ARCHAEOLOGY=azure_openai
+# LLM_PROVIDER_EMBEDDINGS=azure_openai
 
-# GitHub Models
+# Optional task fallback providers for safe cutover/rollback
+# LLM_FALLBACK_PROVIDER_RETRIEVER=groq
+# LLM_FALLBACK_PROVIDER_PLANNER=groq
+# LLM_FALLBACK_PROVIDER_EXECUTOR=groq
+# LLM_FALLBACK_PROVIDER_SIMULATOR=groq
+# LLM_FALLBACK_PROVIDER_ARCHAEOLOGY=github_models
+# LLM_FALLBACK_PROVIDER_EMBEDDINGS=github_models
+
+# Azure OpenAI v1 (primary)
+AZURE_OPENAI_BASE_URL=https://<resource>.openai.azure.com/openai/v1/
+AZURE_OPENAI_AUTH_MODE=managed_identity_then_key
+AZURE_OPENAI_CLIENT_ID=<user-assigned-mi-client-id>
+AZURE_OPENAI_API_KEY=<fallback-key>
+AZURE_OPENAI_TOKEN_SCOPE=https://ai.azure.com/.default
+
+# Per-capability deployment names
+AZURE_OPENAI_DEPLOYMENT_RETRIEVER=gpt-4o-retriever
+AZURE_OPENAI_DEPLOYMENT_PLANNER=gpt-4o-planner
+AZURE_OPENAI_DEPLOYMENT_EXECUTOR=gpt-4o-executor
+AZURE_OPENAI_DEPLOYMENT_SIMULATOR=gpt-4o-simulator
+AZURE_OPENAI_DEPLOYMENT_ARCHAEOLOGY=gpt-4o-archaeology
+AZURE_OPENAI_DEPLOYMENT_EMBEDDINGS=text-embedding-3-small
+
+# GitHub Models (rollback option)
 GITHUB_TOKEN=your_token
 GITHUB_MODELS_ENDPOINT=https://models.inference.ai.azure.com
 GITHUB_MODELS_CHAT_MODEL=gpt-4o
 GITHUB_MODELS_EMBEDDING_MODEL=text-embedding-3-small
 
-# Groq (optional but recommended for fast tasks)
+# Groq (rollback option)
 GROQ_API_KEY=your_key
 GROQ_MODEL=llama-3.1-8b-instant
 GROQ_ENDPOINT=https://api.groq.com/openai/v1
+
+# Provider-aware rate limits
+LLM_RATE_LIMIT_DEFAULT_PER_MINUTE=60
+LLM_RATE_LIMIT_AZURE_OPENAI_PER_MINUTE=120
+LLM_RATE_LIMIT_GITHUB_MODELS_PER_MINUTE=60
+LLM_RATE_LIMIT_GROQ_PER_MINUTE=12
+LLM_RATE_LIMIT_MAX_RETRIES=2
 
 # JWT
 JWT_SECRET=change_me
@@ -157,12 +197,20 @@ docker compose down
 
 - `POST /api/v1/auth/signup`
 - `POST /api/v1/auth/login`
+- `POST /api/v1/auth/mcp-key`
+- `GET /api/v1/auth/mcp-key`
 - `POST /api/v1/snapshot`
+- `POST /api/v1/ingest/git`
 - `POST /api/v1/query`
 - `POST /api/v1/resurrect`
+- `POST /api/v1/decision-archaeology`
 - `GET /api/v1/events`
 - `GET /api/v1/snapshots/timeline`
+- `GET /api/v1/snapshots/{snapshot_id}`
 - `GET /api/v1/chat/history`
+- `GET /api/v1/chat/sessions`
+- `POST /api/v1/chat/sessions`
+- `DELETE /api/v1/chat/history`
 - `SSE /mcp` (MCP endpoint mount)
 - `GET /health`
 
@@ -214,6 +262,7 @@ Recommended release flow:
 
 - Extension README: `secondcortex-vscode/README.md`
 - Demo guide: `DEMO_READY.md`
+- Azure OpenAI cutover runbook: `secondcortex-backend/AZURE_OPENAI_CUTOVER_RUNBOOK.md`
 
 ## License
 

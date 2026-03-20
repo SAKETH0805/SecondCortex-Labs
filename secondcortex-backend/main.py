@@ -4,6 +4,7 @@ SecondCortex Backend — FastAPI Main Server
 Endpoints:
   POST /api/v1/auth/signup  — Create a new account.
   POST /api/v1/auth/login   — Log in and get a JWT token.
+    POST /api/v1/ingest/git   — Retroactively ingest git history into memory.
   POST /api/v1/snapshot     — Receives sanitized IDE snapshots.
   POST /api/v1/query        — User question → Planner → Executor pipeline.
   POST /api/v1/resurrect    — Generate resurrection commands.
@@ -14,7 +15,11 @@ Endpoints:
 import logging
 import sys
 import os
-from datetime import datetime
+import re
+import json
+import asyncio
+from datetime import datetime, timedelta
+from typing import Any
 
 # ── Force Python to see the local directories (fixes Azure ModuleNotFoundError) ──────────
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -33,7 +38,7 @@ import traceback
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from agents.executor import ExecutorAgent
+from agents.executor import ExecutorAgent, _build_latest_snapshot_bullet_summary
 from agents.planner import PlannerAgent
 from agents.retriever import RetrieverAgent
 from agents.simulator import SimulatorAgent
@@ -46,13 +51,23 @@ from models.schemas import (
     QueryResponse,
     ResurrectionRequest,
     ResurrectionResponse,
+    ResurrectionCommand,
+    SafetyReport,
     SnapshotPayload,
+    ArchaeologyRequest,
+    ArchaeologyResponse,
     ChatMessage,
     ChatHistoryResponse,
+    MemoryMetadata,
+    MemoryOperation,
+    StoredSnapshot,
+    RetroIngestRequest,
+    RetroIngestResponse,
 )
 from auth.routes import user_db
 from services.vector_db import VectorDBService
-from services.compression import compress_memory
+from services.llm_client import task_chat_completion, validate_llm_configuration
+from services.git_ingest import RetroGitIngestionService
 
 # ── Logging setup ───────────────────────────────────────────────
 logging.basicConfig(
@@ -78,6 +93,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def validate_startup_llm_config() -> None:
+    errors = validate_llm_configuration()
+    if errors:
+        message = " | ".join(errors)
+        logger.error("LLM startup validation failed: %s", message)
+        raise RuntimeError(f"Invalid LLM configuration: {message}")
+    logger.info("LLM startup validation passed.")
 
 
 @app.exception_handler(Exception)
@@ -113,6 +138,263 @@ retriever = RetrieverAgent(vector_db)
 planner = PlannerAgent(vector_db)
 executor = ExecutorAgent()
 simulator = SimulatorAgent()
+git_ingestion = RetroGitIngestionService()
+
+
+def _parse_terminal_commands(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str) and value.strip():
+        try:
+            import json
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return [str(v).strip() for v in parsed if str(v).strip()]
+        except Exception:
+            return []
+    return []
+
+
+def _is_snapshot_id(target: str) -> bool:
+    return bool(re.match(r"^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$", target.strip().lower()))
+
+
+def _parse_snapshot_terminal_commands(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return [str(v).strip() for v in parsed if str(v).strip()]
+        except Exception:
+            return []
+    return []
+
+
+def _deduplicate_snapshots(snapshots: list[dict]) -> list[dict]:
+    seen_ids: set[str] = set()
+    deduped: list[dict] = []
+
+    for snapshot in snapshots:
+        snapshot_id = str(snapshot.get("id") or "")
+        dedupe_key = snapshot_id or f"{snapshot.get('timestamp')}::{snapshot.get('active_file')}"
+        if dedupe_key in seen_ids:
+            continue
+        seen_ids.add(dedupe_key)
+        deduped.append(snapshot)
+
+    deduped.sort(key=lambda s: str(s.get("timestamp") or ""))
+    return deduped
+
+
+def _extract_relevant_commands(snapshots: list[dict]) -> list[str]:
+    commands: list[str] = []
+    for snapshot in snapshots:
+        for cmd in _parse_snapshot_terminal_commands(snapshot.get("terminal_commands"))[-3:]:
+            if cmd not in commands:
+                commands.append(cmd)
+    return commands[:6]
+
+
+async def _synthesize_decision_history(
+    symbol_name: str,
+    commit_message: str,
+    snapshots: list[dict],
+) -> tuple[str, list[str], list[str], float]:
+    snapshot_context = "\n\n".join([
+        (
+            f"[{s.get('timestamp', 'unknown')}] Branch: {s.get('git_branch') or 'unknown'}\n"
+            f"Active file: {s.get('active_file') or 'unknown'}\n"
+            f"Terminal: {_parse_snapshot_terminal_commands(s.get('terminal_commands'))[-3:] or 'none'}\n"
+            f"Summary: {s.get('summary') or 'No summary'}"
+        )
+        for s in snapshots
+    ])
+
+    prompt = f"""
+A developer is hovering over the function `{symbol_name}` in their editor.
+The commit that last changed this function has the message: "{commit_message}"
+
+Based on the workspace snapshots captured around the time of this change,
+reconstruct the decision history. Be concise — this is a tooltip, not an essay.
+
+Answer these questions in ≤4 sentences total:
+1. Why was this function written this way? (1 sentence)
+2. What was tried before and why it didn't work? (1-2 sentences, only if evidence exists)
+3. What key terminal commands or context led to this approach? (1 sentence, only if relevant)
+
+If there's not enough context, say "No workspace history found for this change."
+Do not hallucinate. Only state what the snapshots support.
+
+Workspace snapshots:
+{snapshot_context}
+"""
+
+    # Keep synthesis bounded to avoid API gateway timeouts during hover requests.
+    response = await asyncio.wait_for(
+        task_chat_completion(
+            task="archaeology",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=150,
+            temperature=0.2,
+        ),
+        timeout=12,
+    )
+
+    summary = (response.choices[0].message.content or "").strip() or "No workspace history found for this change."
+
+    newest_branch = snapshots[-1].get("git_branch") if snapshots else None
+    branches_tried = list(dict.fromkeys([
+        str(s.get("git_branch"))
+        for s in snapshots
+        if s.get("git_branch") and s.get("git_branch") != newest_branch
+    ]))[:3]
+
+    terminal_commands = _extract_relevant_commands(snapshots)
+    confidence = min(len(snapshots) / 5.0, 1.0)
+    return summary, branches_tried, terminal_commands, confidence
+
+
+def _build_fallback_decision_summary(symbol_name: str, commit_message: str, snapshots: list[dict]) -> str:
+    if not snapshots:
+        return "No workspace history found for this change."
+
+    newest = snapshots[-1]
+    oldest = snapshots[0]
+    newest_file = newest.get("active_file") or "unknown file"
+    newest_branch = newest.get("git_branch") or "unknown"
+    time_span = f"{oldest.get('timestamp', 'unknown')} → {newest.get('timestamp', 'unknown')}"
+
+    lines = [
+        f"Found {len(snapshots)} snapshot(s) for `{symbol_name}` around commit '{commit_message[:80]}'.",
+        f"Latest context shows edits in {newest_file} on branch {newest_branch}.",
+        f"Observed snapshot window: {time_span}.",
+    ]
+
+    commands = _extract_relevant_commands(snapshots)
+    if commands:
+        lines.append(f"Recent terminal context includes: {', '.join(commands[:3])}.")
+
+    return " ".join(lines)
+
+
+def _is_activity_lookup_question(question: str) -> bool:
+    q = (question or "").strip().lower()
+    if not q:
+        return False
+
+    return bool(
+        re.search(
+            r"\b("
+            r"what am i doing|what was i doing|"
+            r"what am i working on|what was i working on|"
+            r"current activity|current task|"
+            r"latest activity|latest work"
+            r")\b",
+            q,
+        )
+    )
+
+
+def _is_safe_resurrection_command(command: str) -> bool:
+    normalized = (command or "").strip().lower()
+    if not normalized:
+        return False
+    blocked_prefixes = (
+        "rm ", "del ", "rmdir ", "format ", "shutdown ", "reboot ",
+        "git reset --hard", "git clean -fd", "dropdb ", "sudo ", "powershell -c",
+    )
+    if normalized.startswith(blocked_prefixes):
+        return False
+    allowed_prefixes = (
+        "npm ", "pnpm ", "yarn ", "python ", "pytest ", "uvicorn ", "poetry ",
+        "pip ", "make ", "cargo ", "go ", "dotnet ",
+    )
+    return normalized.startswith(allowed_prefixes)
+
+
+def _workspaces_match(current_workspace: str | None, target_workspace: str | None) -> bool:
+    if not current_workspace or not target_workspace:
+        return False
+    left = os.path.normcase(os.path.abspath(current_workspace))
+    right = os.path.normcase(os.path.abspath(target_workspace))
+    return left == right
+
+
+async def _resolve_resurrection_snapshot(target: str, user_id: str) -> dict | None:
+    normalized_target = (target or "").strip()
+    if not normalized_target:
+        return None
+
+    if _is_snapshot_id(normalized_target):
+        by_id = await vector_db.get_snapshot_by_id(snapshot_id=normalized_target, user_id=user_id)
+        if by_id:
+            return by_id
+
+    timeline = await vector_db.get_snapshot_timeline(limit=1000, user_id=user_id)
+    if not timeline:
+        return None
+
+    target_lower = normalized_target.lower()
+
+    branch_matches = [
+        s for s in timeline
+        if str(s.get("git_branch", "")).strip().lower() == target_lower
+    ]
+    if branch_matches:
+        return branch_matches[-1]
+
+    path_or_summary_matches = [
+        s for s in timeline
+        if target_lower in str(s.get("active_file", "")).lower()
+        or target_lower in str(s.get("summary", "")).lower()
+    ]
+    if path_or_summary_matches:
+        return path_or_summary_matches[-1]
+
+    return None
+
+
+def _build_resurrection_plan(snapshot: dict, target: str, current_workspace: str | None) -> tuple[list[ResurrectionCommand], str, SafetyReport]:
+    commands: list[ResurrectionCommand] = []
+
+    workspace_dir = str(snapshot.get("workspace_folder") or "").strip() or None
+    active_file = str(snapshot.get("active_file") or "").strip() or None
+    branch = str(snapshot.get("git_branch") or "").strip() or None
+    timestamp = str(snapshot.get("timestamp") or "unknown time")
+    summary = str(snapshot.get("summary") or "No summary available.")
+
+    should_open_workspace = bool(workspace_dir and not _workspaces_match(current_workspace, workspace_dir))
+    if should_open_workspace and workspace_dir:
+        commands.append(ResurrectionCommand(type="open_workspace", filePath=workspace_dir))
+
+    commands.append(ResurrectionCommand(type="git_stash"))
+    if branch:
+        commands.append(ResurrectionCommand(type="git_checkout", branch=branch))
+
+    if active_file:
+        commands.append(ResurrectionCommand(type="open_file", filePath=active_file, viewColumn=1))
+
+    terminal_commands = _parse_terminal_commands(snapshot.get("terminal_commands"))
+    last_safe_terminal_command = next((cmd for cmd in reversed(terminal_commands) if _is_safe_resurrection_command(cmd)), None)
+    if last_safe_terminal_command:
+        commands.append(ResurrectionCommand(type="split_terminal", command=last_safe_terminal_command))
+
+    plan_summary = (
+        f"Resolved target '{target}' to snapshot at {timestamp}. "
+        f"Will stash local changes, checkout branch {branch or 'current'}, "
+        f"open {active_file or 'the captured file'}, and restore a safe terminal command. "
+        f"Snapshot summary: {summary}"
+    )
+
+    estimated_risk = "medium" if branch or should_open_workspace else "low"
+    impact = SafetyReport(
+        conflicts=[],
+        unstashed_changes=True,
+        estimated_risk=estimated_risk,
+    )
+    return commands, plan_summary, impact
 
 
 
@@ -152,8 +434,75 @@ async def receive_snapshot(
     Returns 200 OK instantly, then processes asynchronously via Retriever.
     """
     logger.info("Received snapshot for file: %s (user=%s)", payload.active_file, user_id)
+
     background_tasks.add_task(retriever.process_snapshot, payload, user_id)
     return {"status": "accepted", "message": "Snapshot queued for processing."}
+
+
+@app.post("/api/v1/ingest/git", response_model=RetroIngestResponse)
+async def ingest_git_history(
+    request: RetroIngestRequest,
+    user_id: str = Depends(get_current_user),
+):
+    """
+    Retroactively ingest existing git history into user memory.
+    Includes commit messages/diffs/code comments and, when available, GitHub PR context.
+    """
+    logger.info(
+        "Retro ingest requested (user=%s, repo=%s, commits=%s, prs=%s)",
+        user_id,
+        request.repo_path,
+        request.max_commits,
+        request.max_pull_requests,
+    )
+
+    try:
+        records, summary = git_ingestion.mine(
+            repo_path=request.repo_path,
+            max_commits=request.max_commits,
+            max_pull_requests=request.max_pull_requests,
+            include_pull_requests=request.include_pull_requests,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Git ingest failed: {exc}")
+
+    ingested_count = 0
+    for record in records:
+        metadata = MemoryMetadata(
+            operation=MemoryOperation.ADD,
+            entities=[record.active_file, record.git_branch],
+            relations=[],
+            summary=record.summary,
+        )
+
+        stored = StoredSnapshot(
+            id=record.id,
+            timestamp=record.timestamp,
+            workspace_folder=record.workspace_folder,
+            active_file=record.active_file,
+            language_id=record.language_id,
+            shadow_graph=record.shadow_graph,
+            git_branch=record.git_branch,
+            terminal_commands=record.terminal_commands,
+            metadata=metadata,
+        )
+        stored.embedding = await vector_db.generate_embedding(
+            f"{record.summary}\n{record.shadow_graph[:4000]}"
+        )
+        await vector_db.upsert_snapshot(stored, user_id=user_id)
+        ingested_count += 1
+
+    return RetroIngestResponse(
+        status="ok",
+        repo=summary.repo,
+        branch=summary.branch,
+        ingestedCount=ingested_count,
+        commitCount=summary.commit_count,
+        prCount=summary.pr_count,
+        commentCount=summary.comment_count,
+        skippedCount=summary.skipped_count,
+        warnings=summary.warnings,
+    )
 
 
 @app.get("/api/v1/events")
@@ -194,7 +543,6 @@ async def get_snapshot_timeline(
             "id": r.get("id"),
             "timestamp": r.get("timestamp"),
             "active_file": r.get("active_file"),
-            "language_id": r.get("language_id", ""),
             "git_branch": r.get("git_branch"),
             "summary": r.get("summary"),
             "entities": r.get("entities", "").split(",") if r.get("entities") else [],
@@ -280,7 +628,28 @@ async def handle_query(
     try:
         logger.info("Query received: %s (user=%s, session=%s)", req.question, user_id, session_id)
 
-        # Step 1: Plan — break the question into search tasks
+        if _is_activity_lookup_question(req.question):
+            latest = await vector_db.get_snapshot_timeline(limit=1, user_id=user_id)
+            if latest:
+                response = QueryResponse(
+                    summary=_build_latest_snapshot_bullet_summary(latest[0]),
+                    reasoningLog=["Returned the latest captured snapshot for activity lookup."],
+                    commands=[],
+                )
+            else:
+                response = QueryResponse(
+                    summary="No snapshots captured yet. Edit or save a file once, then ask again.",
+                    reasoningLog=["Activity lookup requested but timeline is empty for this user."],
+                    commands=[],
+                )
+
+            user_db.save_chat_message(user_id, "user", req.question, session_id=session_id)
+            user_db.save_chat_message(user_id, "assistant", response.summary, session_id=session_id)
+            logger.info("Activity lookup answered via timeline fast path.")
+            return response
+
+
+        # Step 1: Plan - break the question into search tasks
         plan_result = await planner.plan(req.question, user_id=user_id)
 
         # Step 2: Execute — synthesize and validate
@@ -297,12 +666,12 @@ async def handle_query(
         err = traceback.format_exc()
         exc_str = str(exc)
 
-        # Handle Gemini 429 rate limit errors gracefully
+        # Handle provider rate limit errors gracefully
         if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str:
             logger.warning("QUERY RATE LIMITED: %s", exc_str[:200])
             raise HTTPException(
                 status_code=429,
-                detail="Rate limit reached. The Gemini API free tier quota has been exhausted. Please wait a minute and try again."
+                detail="Rate limit reached for the configured LLM provider. Please wait a minute and try again."
             )
 
         logger.error("QUERY PIPELINE CRASH: %s\n%s", exc, err)
@@ -320,49 +689,152 @@ async def handle_resurrection(
     """
     logger.info("Resurrection requested for target: %s (user=%s)", request.target, user_id)
 
-    plan_result = await planner.plan(
-        f"Find the workspace state for branch or snapshot: {request.target}",
-        user_id=user_id,
-    )
-
-    response = await executor.synthesize(
-        f"Generate workspace resurrection commands for: {request.target}",
-        plan_result,
-    )
-
-    workspace_dir = None
-    if plan_result.retrieved_context:
-        workspace_dir = plan_result.retrieved_context[0].get("workspace_folder")
-
-    safety_report = await simulator.analyze_impact(request.target, workspace_dir)
-
-    commands = response.commands
-    
-    # Check for Cross-Project Context Stitching
-    if request.current_workspace and workspace_dir and request.current_workspace != workspace_dir:
-        logger.info(
-            "Context Stitching Triggered: Current workspace (%s) differs from target workspace (%s)",
-            request.current_workspace, workspace_dir
+    snapshot = await _resolve_resurrection_snapshot(request.target, user_id)
+    if not snapshot:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No matching snapshot found for that target. "
+                "Try a valid branch name, file hint, or exact snapshot ID from Shadow Graph."
+            ),
         )
-        commands.insert(0, ResurrectionCommand(type="open_workspace", filePath=workspace_dir))
+
+    commands, plan_summary, impact = _build_resurrection_plan(
+        snapshot=snapshot,
+        target=request.target,
+        current_workspace=request.current_workspace,
+    )
 
     return ResurrectionResponse(
         commands=commands,
-        impact_analysis=safety_report,
-        plan_summary=response.summary
+        impact_analysis=impact,
+        planSummary=plan_summary,
     )
 
 
-# ── Memory Compression ──────────────────────────────────────────
-
-@app.post("/api/v1/admin/compress")
-async def trigger_compression(
+@app.post("/api/v1/decision-archaeology", response_model=ArchaeologyResponse)
+async def decision_archaeology(
+    request: ArchaeologyRequest,
     user_id: str = Depends(get_current_user),
 ):
-    """Trigger memory compression (daily/weekly/feature summaries) for the current user."""
-    logger.info("Memory compression triggered for user=%s", user_id)
-    result = await compress_memory(user_id, vector_db)
-    return result
+    """
+    Given function + file + commit context, reconstruct decision history
+    from stored workspace snapshots and synthesize a hover-friendly summary.
+    """
+    logger.info(
+        "Decision archaeology request: %s in %s (user=%s)",
+        request.symbol_name,
+        request.file_path,
+        user_id,
+    )
+
+    query = (
+        f"File: {request.file_path}\n"
+        f"Function: {request.symbol_name}\n"
+        f"Signature: {request.signature}\n"
+        f"Commit: {request.commit_hash}\n"
+        f"Commit message: {request.commit_message}\n"
+        f"Author: {request.author}\n"
+        f"Timestamp: {request.timestamp.isoformat()}"
+    )
+
+    time_window_start = request.timestamp - timedelta(hours=2)
+    time_window_end = request.timestamp + timedelta(hours=1)
+
+    # Bound expensive retrieval to keep hover interactions responsive.
+    timeline_task = asyncio.create_task(vector_db.get_snapshot_timeline(limit=800, user_id=user_id))
+    semantic_task = asyncio.create_task(vector_db.semantic_search(query=query, top_k=6, user_id=user_id))
+    symbol_task = asyncio.create_task(
+        vector_db.semantic_search(
+            query=f"function {request.symbol_name} implementation decision {request.commit_hash}",
+            top_k=4,
+            user_id=user_id,
+        )
+    )
+
+    timeline, semantic_results, symbol_results = await asyncio.gather(
+        asyncio.wait_for(timeline_task, timeout=6),
+        asyncio.wait_for(semantic_task, timeout=6),
+        asyncio.wait_for(symbol_task, timeout=6),
+        return_exceptions=True,
+    )
+
+    if isinstance(timeline, Exception):
+        logger.warning("Decision archaeology timeline retrieval degraded: %s", timeline)
+        timeline = []
+    if isinstance(semantic_results, Exception):
+        logger.warning("Decision archaeology semantic retrieval degraded: %s", semantic_results)
+        semantic_results = []
+    if isinstance(symbol_results, Exception):
+        logger.warning("Decision archaeology symbol retrieval degraded: %s", symbol_results)
+        symbol_results = []
+
+    time_filtered: list[dict] = []
+    for snapshot in timeline:
+        if str(snapshot.get("active_file") or "") != request.file_path:
+            continue
+
+        snapshot_ts = _parse_iso_timestamp(str(snapshot.get("timestamp") or ""))
+        if snapshot_ts is None:
+            continue
+
+        if time_window_start <= snapshot_ts <= time_window_end:
+            time_filtered.append(snapshot)
+
+    semantic_file_filtered = [
+        s for s in semantic_results
+        if str(s.get("active_file") or "") == request.file_path
+    ]
+    symbol_file_filtered = [
+        s for s in symbol_results
+        if str(s.get("active_file") or "") == request.file_path
+    ]
+
+    all_results = _deduplicate_snapshots(
+        time_filtered + semantic_file_filtered + symbol_file_filtered
+    )
+
+    # Keep synthesis context compact for predictable latency.
+    all_results = all_results[-18:]
+
+    if not all_results:
+        return ArchaeologyResponse(found=False, summary=None)
+
+    try:
+        summary, branches_tried, terminal_commands, confidence = await asyncio.wait_for(
+            _synthesize_decision_history(
+            symbol_name=request.symbol_name,
+            commit_message=request.commit_message,
+            snapshots=all_results,
+            ),
+            timeout=14,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Decision synthesis timed out for %s in %s", request.symbol_name, request.file_path)
+        return ArchaeologyResponse(
+            found=True,
+            summary=_build_fallback_decision_summary(request.symbol_name, request.commit_message, all_results),
+            branchesTried=list(dict.fromkeys([str(s.get("git_branch")) for s in all_results if s.get("git_branch")]))[:3],
+            terminalCommands=_extract_relevant_commands(all_results),
+            confidence=min(len(all_results) / 8.0, 0.6),
+        )
+    except Exception as exc:
+        logger.error("Decision synthesis failed: %s", exc)
+        return ArchaeologyResponse(
+            found=True,
+            summary=_build_fallback_decision_summary(request.symbol_name, request.commit_message, all_results),
+            branchesTried=list(dict.fromkeys([str(s.get("git_branch")) for s in all_results if s.get("git_branch")]))[:3],
+            terminalCommands=_extract_relevant_commands(all_results),
+            confidence=min(len(all_results) / 10.0, 0.5),
+        )
+
+    return ArchaeologyResponse(
+        found=True,
+        summary=summary,
+        branchesTried=branches_tried,
+        terminalCommands=terminal_commands,
+        confidence=confidence,
+    )
 
 
 # ── Run server ──────────────────────────────────────────────────

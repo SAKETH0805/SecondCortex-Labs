@@ -3,7 +3,7 @@
 **Your AI-Powered Second Brain for Development Context**
 
 SecondCortex is a VS Code extension designed to capture and resurrect your development state. It tracks your IDE activity, enforces a Semantic Firewall to protect sensitive data, and allows you to "resurrect" complex workspace setups with a single command.
-
+Just Adding to test 
 ## 🚀 Key Features
 
 - **Workspace Resurrection Engine**: Restore branch context, stashes, open files, and terminal intent in one flow.

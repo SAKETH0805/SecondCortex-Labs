@@ -20,7 +20,6 @@ import time
 import uuid
 from datetime import datetime
 
-from config import settings
 from models.schemas import (
     MemoryMetadata,
     MemoryOperation,
@@ -28,8 +27,7 @@ from models.schemas import (
     StoredSnapshot,
 )
 from services.vector_db import VectorDBService
-from services.llm_client import create_groq_client, get_groq_model
-from services.rate_limiter import rate_limited_call
+from services.llm_client import task_chat_completion
 
 logger = logging.getLogger("secondcortex.retriever")
 
@@ -55,8 +53,11 @@ Rules:
 - UPDATE: The developer is continuing the same task from the previous snapshot.
 - DELETE: The developer abandoned the previous task (rabbit hole — switched context completely).
 - NOOP: No meaningful change from the previous snapshot.
-- "entities" should be identifiers like file names, function names, branch names, error messages.
-- "relations" should describe how entities relate (e.g., "calls", "depends_on", "fixes").
+- Prefer UPDATE over ADD unless there is strong evidence of a new task boundary.
+- "summary" must be one sentence, present tense, specific, and under 24 words.
+- "entities" should include only high-signal identifiers (file, symbol, branch, concrete error) and avoid filler terms.
+- "relations" should be sparse and factual (e.g., "edits", "calls", "fixes", "depends_on").
+- Return JSON only. No markdown or commentary.
 """
 
 
@@ -69,9 +70,6 @@ class RetrieverAgent:
         self._previous_snapshots: dict[str, StoredSnapshot] = {}
         # Per-user last LLM call timestamp for cooldown
         self._last_llm_call: dict[str, float] = {}
-
-        # Initialize LLM client (Groq)
-        self.client = create_groq_client()
 
     async def process_snapshot(self, payload: SnapshotPayload, user_id: str | None = None) -> StoredSnapshot:
         """
@@ -156,9 +154,8 @@ class RetrieverAgent:
         )
 
         try:
-            response = await rate_limited_call(
-                self.client.chat.completions.create,
-                model=get_groq_model(),
+            response = await task_chat_completion(
+                task="retriever",
                 messages=[
                     {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
                     {"role": "user", "content": user_message},

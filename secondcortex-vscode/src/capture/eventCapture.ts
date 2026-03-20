@@ -6,7 +6,7 @@ import { SnapshotCache } from './snapshotCache';
 import { BackendClient } from '../backendClient';
 
 /**
- * CapturedSnapshot – the sanitized data structure that leaves the laptop.
+ * CapturedSnapshot - the sanitized data structure that leaves the laptop.
  */
 export interface CapturedSnapshot {
     timestamp: string;
@@ -20,7 +20,7 @@ export interface CapturedSnapshot {
 }
 
 /**
- * EventCapture – listens to IDE events, feeds them through the Debouncer
+ * EventCapture - listens to IDE events, feeds them through the Debouncer
  * and Semantic Firewall, then ships sanitized snapshots to the backend
  * (or caches them offline via SnapshotCache).
  */
@@ -37,10 +37,12 @@ export class EventCapture {
     ) { }
 
     register(context: vscode.ExtensionContext): void {
-        // ── Active editor changes ──────────────────────────────────
+        // Active editor changes
         const editorSub = vscode.window.onDidChangeActiveTextEditor((editor) => {
             const enabled = vscode.workspace.getConfiguration('secondcortex').get<boolean>('captureEnabled', true);
-            if (!enabled || !editor || editor.document.uri.scheme !== 'file') { return; }
+            if (!enabled || !editor || editor.document.uri.scheme !== 'file') {
+                return;
+            }
 
             const filePath = editor.document.uri.fsPath;
 
@@ -58,7 +60,7 @@ export class EventCapture {
         });
         this.disposables.push(editorSub);
 
-        // ── Text document close (noise detection) ──────────────────
+        // Text document close (noise detection)
         const closeSub = vscode.workspace.onDidCloseTextDocument((doc) => {
             const wasMeaningful = this.debouncer.cancel(doc.uri.fsPath);
             if (!wasMeaningful) {
@@ -67,20 +69,24 @@ export class EventCapture {
         });
         this.disposables.push(closeSub);
 
-        // ── Terminal open tracking ─────────────────────────────────
+        // Terminal open tracking
         const termSub = vscode.window.onDidOpenTerminal((terminal) => {
             this.recentTerminalCommands.push(`[terminal opened] ${terminal.name}`);
         });
         this.disposables.push(termSub);
 
-        // ── Text edits (re-touch the debouncer on typing) ──────────
+        // Text edits (re-touch the debouncer on typing)
         const changeSub = vscode.workspace.onDidChangeTextDocument((e) => {
             const enabled = vscode.workspace.getConfiguration('secondcortex').get<boolean>('captureEnabled', true);
-            if (!enabled || e.document.uri.scheme !== 'file') { return; }
+            if (!enabled || e.document.uri.scheme !== 'file') {
+                return;
+            }
 
             const filePath = e.document.uri.fsPath;
             const docUri = e.document.uri.toString();
-            if (this.firewall.isIgnored(filePath)) { return; }
+            if (this.firewall.isIgnored(filePath)) {
+                return;
+            }
 
             this.debouncer.touch(filePath, () => {
                 const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === docUri);
@@ -93,13 +99,17 @@ export class EventCapture {
         });
         this.disposables.push(changeSub);
 
-        // ── Save events (immediate capture) ───────────────────────
+        // Save events (immediate capture)
         const saveSub = vscode.workspace.onDidSaveTextDocument((doc) => {
             const enabled = vscode.workspace.getConfiguration('secondcortex').get<boolean>('captureEnabled', true);
-            if (!enabled || doc.uri.scheme !== 'file') { return; }
+            if (!enabled || doc.uri.scheme !== 'file') {
+                return;
+            }
 
             const filePath = doc.uri.fsPath;
-            if (this.firewall.isIgnored(filePath)) { return; }
+            if (this.firewall.isIgnored(filePath)) {
+                return;
+            }
 
             this.captureDocumentAndShip(doc).catch((err) => {
                 this.output.appendLine(`[EventCapture] Error capturing saved snapshot: ${err}`);
@@ -107,7 +117,7 @@ export class EventCapture {
         });
         this.disposables.push(saveSub);
 
-        // ── Background flush (works even when sidebar is closed) ──
+        // Background flush (works even when sidebar is closed)
         const flushInterval = setInterval(() => {
             this.cache.flushToBackend(this.backend).catch((err) => {
                 this.output.appendLine(`[EventCapture] Background cache flush error: ${err}`);
@@ -126,17 +136,28 @@ export class EventCapture {
         });
         this.disposables.push(focusSub);
 
+        // Seed context immediately so first chat query has at least one snapshot.
+        const bootstrapEditor = vscode.window.activeTextEditor;
+        const captureEnabled = vscode.workspace.getConfiguration('secondcortex').get<boolean>('captureEnabled', true);
+        if (captureEnabled && bootstrapEditor && bootstrapEditor.document.uri.scheme === 'file') {
+            const bootstrapPath = bootstrapEditor.document.uri.fsPath;
+            if (!this.firewall.isIgnored(bootstrapPath)) {
+                this.captureDocumentAndShip(bootstrapEditor.document).catch((err) => {
+                    this.output.appendLine(`[EventCapture] Error capturing startup snapshot: ${err}`);
+                });
+            }
+        }
+
         context.subscriptions.push(...this.disposables);
     }
 
     private async captureDocumentAndShip(doc: vscode.TextDocument): Promise<void> {
         const rawContent = doc.getText();
 
-        // ── Semantic Firewall: scrub secrets ──────────────────────
+        // Semantic Firewall: scrub secrets
         const sanitized = this.firewall.scrub(rawContent);
 
-        // ── Build the snapshot payload ────────────────────────────
-        // Send workspace-relative path (never absolute — prevents leaking username/OS info)
+        // Build snapshot payload
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
         const relativePath = workspaceRoot
             ? path.relative(workspaceRoot, doc.uri.fsPath).replace(/\\/g, '/')
@@ -154,10 +175,9 @@ export class EventCapture {
 
         this.output.appendLine(`[EventCapture] Snapshot ready for: ${doc.uri.fsPath}`);
 
-        // ── Ship or cache ─────────────────────────────────────────
-        const success = await this.backend.sendSnapshot(snapshot as unknown as Record<string, unknown>);
-        if (!success) {
-            this.output.appendLine('[EventCapture] Backend unreachable — caching locally.');
+        const uploadOk = await this.backend.sendSnapshot(snapshot as unknown as Record<string, unknown>);
+        if (!uploadOk) {
+            this.output.appendLine('[EventCapture] Backend unreachable - caching snapshot locally.');
             this.cache.store(snapshot);
         }
 

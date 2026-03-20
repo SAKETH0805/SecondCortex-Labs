@@ -9,13 +9,15 @@ Supports per-user namespaced collections for multi-tenant isolation.
 from __future__ import annotations
 
 import logging
+import json
+import hashlib
+import random
 from typing import Any
 
 import chromadb
 
 from config import settings
-from services.llm_client import create_llm_client, get_embedding_model
-from services.rate_limiter import rate_limited_call
+from services.llm_client import task_embedding_create
 
 logger = logging.getLogger("secondcortex.vectordb")
 
@@ -24,8 +26,6 @@ class VectorDBService:
     """Manages LLM embeddings and ChromaDB operations with per-user isolation."""
 
     def __init__(self) -> None:
-        self.openai_client = create_llm_client()
-
         # Initialize ChromaDB client with configurable persistent path
         try:
             db_path = settings.chroma_db_path
@@ -52,14 +52,36 @@ class VectorDBService:
             logger.error("Failed to get/create collection '%s': %s", collection_name, exc)
             return None
 
+    def _infer_collection_dimension(self, collection, default_dim: int = 1536) -> int:
+        """Infer vector dimension from existing records, or fall back to a default."""
+        try:
+            if (collection.count() or 0) <= 0:
+                return default_dim
+
+            probe = collection.get(limit=1, include=["embeddings"])
+            embeddings = (probe or {}).get("embeddings") or []
+            if embeddings and embeddings[0]:
+                return len(embeddings[0])
+        except Exception:
+            pass
+        return default_dim
+
+    def _build_fallback_embedding(self, text: str, dimension: int) -> list[float]:
+        """
+        Deterministic fallback embedding used when external embedding APIs fail.
+        Keeps ingestion/query functional instead of dropping all context.
+        """
+        seed = int.from_bytes(hashlib.sha256((text or "").encode("utf-8")).digest()[:8], "big")
+        rng = random.Random(seed)
+        return [rng.uniform(-1.0, 1.0) for _ in range(max(1, dimension))]
+
     # ── Embeddings ──────────────────────────────────────────────
 
     async def generate_embedding(self, text: str) -> list[float]:
         """Generate a text embedding. Routes through the primary OpenAI/GitHub Models client."""
         try:
-            response = await rate_limited_call(
-                self.openai_client.embeddings.create,
-                model=get_embedding_model(),
+            response = await task_embedding_create(
+                task="embeddings",
                 input=text[:8000],
             )
             return response.data[0].embedding
@@ -86,13 +108,29 @@ class VectorDBService:
                 "language_id": str(snapshot.language_id or ""),
                 "shadow_graph": str((snapshot.shadow_graph or "")[:5000]),
                 "git_branch": str(snapshot.git_branch or ""),
+                "terminal_commands": json.dumps(snapshot.terminal_commands or []),
                 "summary": str(snapshot.metadata.summary if snapshot.metadata else ""),
                 "entities": ",".join(snapshot.metadata.entities) if snapshot.metadata and snapshot.metadata.entities else "",
             }
 
-            collection.add(
+            embedding = snapshot.embedding or []
+            if not embedding:
+                dimension = self._infer_collection_dimension(collection)
+                embedding_source = (
+                    f"{metadata.get('active_file', '')}\n"
+                    f"{metadata.get('summary', '')}\n"
+                    f"{metadata.get('shadow_graph', '')}"
+                )
+                embedding = self._build_fallback_embedding(embedding_source, dimension)
+                logger.warning(
+                    "Snapshot %s missing external embedding; using deterministic fallback vector (dim=%d).",
+                    snapshot.id,
+                    len(embedding),
+                )
+
+            collection.upsert(
                 ids=[str(snapshot.id)],
-                embeddings=[snapshot.embedding or []],
+                embeddings=[embedding],
                 metadatas=[metadata],
                 documents=[str(snapshot.shadow_graph or "")]
             )
@@ -112,8 +150,8 @@ class VectorDBService:
             query_embedding = await self.generate_embedding(query)
 
             if not query_embedding:
-                logger.warning("No query embedding generated.")
-                return []
+                logger.warning("No query embedding generated; falling back to recent snapshots.")
+                return await self.get_recent_snapshots(limit=top_k, user_id=user_id)
 
             results = collection.query(
                 query_embeddings=[query_embedding],
@@ -126,11 +164,11 @@ class VectorDBService:
                 if metadatas_list is not None:
                     return [dict(meta) for meta in metadatas_list]
 
-            return []
+            return await self.get_recent_snapshots(limit=top_k, user_id=user_id)
 
         except Exception as exc:
             logger.error("Semantic search failed: %s", exc)
-            return []
+            return await self.get_recent_snapshots(limit=top_k, user_id=user_id)
 
     async def get_recent_snapshots(self, limit: int = 10, user_id: str | None = None) -> list[dict]:
         """Fetch the most recent snapshots using direct retrieval (not vector search).
@@ -144,17 +182,17 @@ class VectorDBService:
             return []
 
         try:
-            # Use .get() for direct retrieval (no embedding needed)
+            # Fetch everything, sort by timestamp, return newest N.
+            # ChromaDB offset does NOT guarantee insertion order.
+            total = collection.count() or 0
             results = collection.get(
-                limit=limit,
+                limit=total if total > 0 else 1,
                 include=["metadatas", "documents"]
             )
 
             if results and results.get("metadatas"):
-                # Sort by timestamp descending (most recent first)
-                metadatas = results["metadatas"]
                 sorted_metas = sorted(
-                    metadatas,
+                    results["metadatas"],
                     key=lambda m: m.get("timestamp", ""),
                     reverse=True
                 )
@@ -167,21 +205,44 @@ class VectorDBService:
             return []
 
     async def get_snapshot_timeline(self, limit: int = 200, user_id: str | None = None) -> list[dict]:
-        """Fetch a chronologically sorted timeline of snapshot metadata."""
+        """Fetch a chronologically sorted timeline of snapshot metadata (newest first)."""
         collection = self._get_collection(user_id)
         if collection is None:
             logger.warning("Chroma collection not available — returning empty timeline.")
             return []
 
         try:
-            results = collection.get(limit=limit, include=["metadatas"])
+            total = collection.count() or 0
+            if total == 0:
+                return []
+            
+            # Fetch only what we need + some buffer for sorting
+            fetch_limit = min(total, max(limit * 3, 500))
+            results = collection.get(
+                limit=fetch_limit,
+                include=["metadatas"]
+            )
             if not results or not results.get("metadatas"):
                 return []
 
             metadatas = [dict(meta) for meta in results["metadatas"] if meta]
-            # Oldest -> newest for linear slider traversal.
-            metadatas.sort(key=lambda m: m.get("timestamp", ""))
-            return metadatas
+            # Sort by timestamp (newest first) with proper numeric comparison
+            def get_sort_key(m: dict) -> float:
+                ts = m.get("timestamp", "")
+                if isinstance(ts, (int, float)):
+                    return float(ts)
+                # Try parsing ISO string to float unix timestamp
+                if isinstance(ts, str):
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        return dt.timestamp()
+                    except Exception:
+                        return 0.0
+                return 0.0
+            
+            metadatas.sort(key=get_sort_key, reverse=True)
+            return metadatas[:limit]
         except Exception as exc:
             logger.error("get_snapshot_timeline failed: %s", exc)
             return []

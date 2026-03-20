@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from datetime import datetime, timezone
+from typing import Any
 
 from agents.planner import PlanResult
 from models.schemas import QueryResponse, ResurrectionCommand
-from services.llm_client import create_groq_client, get_groq_model
-from services.rate_limiter import rate_limited_call
+from services.llm_client import task_chat_completion
 
 logger = logging.getLogger("secondcortex.executor")
 
@@ -25,35 +27,29 @@ logger = logging.getLogger("secondcortex.executor")
 ENABLE_VALIDATION = False
 
 EXECUTOR_SYSTEM_PROMPT = """\
-You are the SecondCortex Executor Agent. You receive retrieved context \
-(snapshots from the developer's IDE history) and the original user question. \
-Your job is to synthesize a clear, accurate timeline/story answering their question.
+You are the SecondCortex Executor. Synthesize a brief, direct answer from retrieved snapshots.
 
-You MUST respond with ONLY valid JSON matching this schema:
+Respond with ONLY valid JSON (no markdown, no prose):
 {
-  "summary": "A clear, human-readable answer to the question",
-  "reasoning_log": [
-    "Step 1: Found commit on branch fix-payment at 14:30...",
-    "Step 2: Cross-referenced with file auth.go..."
-  ],
-  "confidence": 0.0 to 1.0,
-  "discrepancies": ["Optional: any conflicting data points found"],
-  "commands": [
-    {
-      "type": "git_stash" | "git_checkout" | "open_file" | "split_terminal" | "run_command",
-      "branch": "optional",
-      "filePath": "optional",
-      "viewColumn": 1,
-      "command": "optional"
-    }
-  ]
+  "summary": "Direct 1-2 sentence answer. Add 2-3 bullet facts if helpful. Max 200 chars.",
+  "reasoning_log": ["Step 1: ...", "Step 2: ..."],
+  "confidence": 0.7,
+  "discrepancies": [],
+  "commands": []
 }
 
 Rules:
-- "summary" must directly answer the user's question.
-- "reasoning_log" shows your chain of thought for transparency.
-- "confidence" must be between 0.0 and 1.0. If below 0.85, include discrepancies.
-- "commands" are optional Workspace Resurrection instructions.
+- Summary: Answer FIRST sentence. Then optional bullets (- fact). Keep to <200 chars.
+- For recency questions (latest/newest/most recent/recent snapshot), prefer this exact structure:
+    Most recent snapshot:
+    - Work context: ...
+    - File: ...
+    - Branch: ...
+    - Time: ... (include timezone)
+- confidence: 0.0-1.0. Low confidence = be explicit about uncertainty.
+- reasoning_log: 2-3 short factual lines max.
+- commands: [] unless explicitly helpful (resurrect branch, open file).
+- Return JSON only. No wrapping markdown or extra prose.
 """
 
 VALIDATION_PROMPT = """\
@@ -76,7 +72,7 @@ class ExecutorAgent:
     """Synthesizes answers and validates them internally."""
 
     def __init__(self) -> None:
-        self.client = create_groq_client()
+        pass
 
     async def synthesize(self, question: str, plan_result: PlanResult) -> QueryResponse:
         """
@@ -99,6 +95,17 @@ class ExecutorAgent:
                 f"  Code: {str(ctx.get('shadow_graph', ''))[:500]}\n"
             )
         context_block = "\n".join(context_parts) if context_parts else "No relevant context found."
+
+        if _is_latest_lookup_question(question) and plan_result.retrieved_context:
+            latest = plan_result.retrieved_context[0]
+            return QueryResponse(
+                summary=_build_latest_snapshot_bullet_summary(latest),
+                reasoning_log=[
+                    "Detected recency query in executor and normalized response format.",
+                    f"Selected snapshot id={latest.get('id', 'unknown')} timestamp={latest.get('timestamp', 'unknown')}",
+                ],
+                commands=[],
+            )
 
         # ── Step 2: Draft the answer ─────────────────────────────
         draft = await self._generate_draft(question, context_block)
@@ -147,9 +154,8 @@ class ExecutorAgent:
     async def _generate_draft(self, question: str, context: str) -> dict:
         """Call LLM to draft the answer."""
         try:
-            response = await rate_limited_call(
-                self.client.chat.completions.create,
-                model=get_groq_model(),
+            response = await task_chat_completion(
+                task="executor",
                 messages=[
                     {"role": "system", "content": EXECUTOR_SYSTEM_PROMPT},
                     {"role": "user", "content": f"Question: {question}\n\nRetrieved Context:\n{context}"},
@@ -166,9 +172,8 @@ class ExecutorAgent:
     async def _validate_draft(self, question: str, draft: dict, context: str) -> dict:
         """Internal Validation Loop — checks draft against the evidence."""
         try:
-            response = await rate_limited_call(
-                self.client.chat.completions.create,
-                model=get_groq_model(),
+            response = await task_chat_completion(
+                task="executor",
                 messages=[
                     {"role": "system", "content": VALIDATION_PROMPT},
                     {
@@ -188,3 +193,68 @@ class ExecutorAgent:
         except Exception as exc:
             logger.error("Validator LLM call failed. Error: %s", exc, exc_info=True)
             return {"is_valid": True, "issues": [], "revised_confidence": 0.5}
+
+
+def _is_latest_lookup_question(question: str) -> bool:
+    q = (question or "").strip().lower()
+    if not q:
+        return False
+    has_recency = bool(re.search(r"\b(latest|newest|most recent|recent|current|last|fetch latest)\b", q))
+    has_snapshot_context = bool(re.search(r"\b(snapshot|snapshots|timeline|context|update|edited|editing|file|commit|branch)\b", q))
+    return has_recency and has_snapshot_context
+
+
+def _extract_work_context(snapshot: dict) -> str:
+    for key in ("summary", "shadow_graph", "document"):
+        value = str(snapshot.get(key) or "").strip()
+        if value:
+            normalized = " ".join(value.split())
+            return normalized[:180]
+    return "No work context available."
+
+
+def _format_snapshot_timestamp_with_timezone(raw_timestamp: Any) -> str:
+    if raw_timestamp is None:
+        return "unknown time"
+
+    dt: datetime | None = None
+    if isinstance(raw_timestamp, (int, float)):
+        ts = float(raw_timestamp)
+        if ts > 1_000_000_000_000:
+            ts /= 1000.0
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    elif isinstance(raw_timestamp, str):
+        value = raw_timestamp.strip()
+        if not value:
+            return "unknown time"
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(value)
+        except Exception:
+            return str(raw_timestamp)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        return str(raw_timestamp)
+
+    tz_name = dt.tzname() or "UTC"
+    tz_offset = dt.strftime("%z")
+    if len(tz_offset) == 5:
+        tz_offset = f"{tz_offset[:3]}:{tz_offset[3:]}"
+    elif not tz_offset:
+        tz_offset = "+00:00"
+
+    return f"{dt.isoformat()} ({tz_name} {tz_offset})"
+
+
+def _build_latest_snapshot_bullet_summary(snapshot: dict) -> str:
+    return "\n".join(
+        [
+            "Most recent snapshot:",
+            f"- Work context: {_extract_work_context(snapshot)}",
+            f"- File: {snapshot.get('active_file') or 'an unknown file'}",
+            f"- Branch: {snapshot.get('git_branch') or 'unknown'}",
+            f"- Time: {_format_snapshot_timestamp_with_timezone(snapshot.get('timestamp'))}",
+        ]
+    )

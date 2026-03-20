@@ -320,4 +320,47 @@ export class BackendClient {
             return null;
         }
     }
+
+    /** Request decision archaeology synthesis for a symbol+commit context. */
+    async getDecisionArchaeology(payload: {
+        filePath: string;
+        symbolName: string;
+        signature: string;
+        commitHash: string;
+        commitMessage: string;
+        author: string;
+        timestamp: string;
+    }): Promise<{
+        found: boolean;
+        summary: string | null;
+        branchesTried: string[];
+        terminalCommands: string[];
+        confidence: number;
+    } | null> {
+        try {
+            const res = await fetch(`${this.baseUrl}/api/v1/decision-archaeology`, {
+                method: 'POST',
+                headers: await this.getHeaders(),
+                body: JSON.stringify(payload),
+            });
+            if (res.status === 401) {
+                await this.handle401();
+                return null;
+            }
+            if (!res.ok) {
+                this.output.appendLine(`[BackendClient] Decision archaeology failed: ${res.status} ${res.statusText}`);
+                return null;
+            }
+            return (await res.json()) as {
+                found: boolean;
+                summary: string | null;
+                branchesTried: string[];
+                terminalCommands: string[];
+                confidence: number;
+            };
+        } catch (err) {
+            this.output.appendLine(`[BackendClient] Network error fetching decision archaeology: ${err}`);
+            return null;
+        }
+    }
 }

@@ -12,8 +12,7 @@ import logging
 import subprocess
 import os
 
-from services.llm_client import create_groq_client, get_groq_model
-from services.rate_limiter import rate_limited_call
+from services.llm_client import task_chat_completion
 from models.schemas import SafetyReport
 
 logger = logging.getLogger("secondcortex.simulator")
@@ -33,6 +32,8 @@ You MUST respond with ONLY valid JSON matching this schema:
 Rule:
 - If there are uncommitted or untracked changes in the git status output, set unstashed_changes to true.
 - If unstashed_changes is true, estimated_risk should be at least 'medium' (or 'high' if the target involves heavily modified files).
+- Include concrete conflicting file paths when available; otherwise leave conflicts empty.
+- Set estimated_risk = high when many files are modified, merge conflicts are present, or branch switch is likely destructive.
 - Keep the output purely valid JSON with no markdown wrapping.
 """
 
@@ -40,7 +41,7 @@ class SimulatorAgent:
     """Agent that handles pre-flight checks and impact analysis."""
 
     def __init__(self) -> None:
-        self.client = create_groq_client()
+        pass
 
     async def analyze_impact(self, target_branch: str, workspace_dir: str | None = None) -> SafetyReport:
         """
@@ -53,9 +54,8 @@ class SimulatorAgent:
 
         # 2. Ask LLM to analyze the impact
         try:
-            response = await rate_limited_call(
-                self.client.chat.completions.create,
-                model=get_groq_model(),
+            response = await task_chat_completion(
+                task="simulator",
                 messages=[
                     {"role": "system", "content": SIMULATOR_SYSTEM_PROMPT},
                     {
