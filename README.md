@@ -31,6 +31,10 @@ It consists of:
 - Cortex as a Service (MCP): query private developer memory from external AI clients
 - Sidebar Chat with session history and new chat
 - Shadow Graph visualization panel
+- Shadow Graph timeline time-travel with snapshot lookup/restore workflow
+- Decision Archaeology hover (function-level historical reasoning from git + snapshot context)
+- Retro Git Ingestion (commits, diffs, comments, optional PR context)
+- Activity Lookup fast-path ("what am I working on?" queries from latest snapshot)
 - Secure auth token handling via VS Code SecretStorage
 - Command Palette + CLI-style workflows
 
@@ -157,13 +161,20 @@ docker compose down
 
 - `POST /api/v1/auth/signup`
 - `POST /api/v1/auth/login`
+- `POST /api/v1/auth/mcp-key`
+- `GET /api/v1/auth/mcp-key`
 - `POST /api/v1/snapshot`
 - `POST /api/v1/ingest/git`
 - `POST /api/v1/query`
 - `POST /api/v1/resurrect`
+- `POST /api/v1/decision-archaeology`
 - `GET /api/v1/events`
 - `GET /api/v1/snapshots/timeline`
+- `GET /api/v1/snapshots/{snapshot_id}`
 - `GET /api/v1/chat/history`
+- `GET /api/v1/chat/sessions`
+- `POST /api/v1/chat/sessions`
+- `DELETE /api/v1/chat/history`
 - `SSE /mcp` (MCP endpoint mount)
 - `GET /health`
 
