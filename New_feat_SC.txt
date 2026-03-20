@@ -1,0 +1,25 @@
+3. Memory Compression (Auto Summarization Layers)
+Your vector DB will grow huge.
+Add:
+•	Daily summaries
+•	Weekly summaries
+•	Feature-level summaries
+Function:
+async def compress_memory(user_id):
+    # Summarize old snapshots into higher-level chunks
+💡 Improves speed + context quality
+4. Live Cortex Timeline(Demo Impressors)
+In the web dashboard, render today's snapshots as a horizontal timeline. Click any point to see what file you were in, what branch, and what the LLM summary was. This is your single most powerful demo moment — judges can literally watch a developer's day unfold.
+•	Use timestamps already stored in MockSnapshot to build the axis
+•	Color-code points by language_id (Python = blue, TS = amber, etc.)
+•	Click-to-restore: clicking a point triggers workspace resurrection
+Demo impact ★★★★★             Build effort ~ 4 hrs
+ (The 1 and 4 are kinda similar)
+6. Onboarding Tour with Demo Data (UX Improvement)
+Judges evaluating 100+ projects won't wait for setup. Ship a "demo mode" with pre-seeded cortex snapshots representing a realistic coding session. A guided step-by-step tour in the web dashboard (using a simple tooltip overlay library) shows exactly what SecondCortex does in 60 seconds.
+•	Seed script using your existing MockSnapshot class — 20–30 realistic snapshots
+•	Add a ?demo=true URL param that bypasses auth and loads demo user
+•	Tooltip tour library: driver.js (tiny, no dependencies)
+Demo impact ★★★★★                   Build effort ~ 4 hrs
+
+	
