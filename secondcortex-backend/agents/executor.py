@@ -13,9 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-from datetime import datetime, timezone
-from typing import Any
 
 from agents.planner import PlanResult
 from models.schemas import QueryResponse, ResurrectionCommand
@@ -31,7 +28,7 @@ You are the SecondCortex Executor. Synthesize a brief, direct answer from retrie
 
 Respond with ONLY valid JSON (no markdown, no prose):
 {
-  "summary": "Direct 1-2 sentence answer. Add 2-3 bullet facts if helpful. Max 200 chars.",
+    "summary": "Direct answer with concrete evidence. Use short bullets when needed.",
   "reasoning_log": ["Step 1: ...", "Step 2: ..."],
   "confidence": 0.7,
   "discrepancies": [],
@@ -39,13 +36,11 @@ Respond with ONLY valid JSON (no markdown, no prose):
 }
 
 Rules:
-- Summary: Answer FIRST sentence. Then optional bullets (- fact). Keep to <200 chars.
-- For recency questions (latest/newest/most recent/recent snapshot), prefer this exact structure:
-    Most recent snapshot:
-    - Work context: ...
-    - File: ...
-    - Branch: ...
-    - Time: ... (include timezone)
+- Always answer the user's explicit intent (explain/summarize/list/compare).
+- For latest/recent snapshot requests, explain findings in natural language.
+- Prefer concise narrative over rigid field templates.
+- Do NOT collapse a multi-snapshot request into a single snapshot.
+- Do NOT start answers with labels like "Most recent snapshot:".
 - confidence: 0.0-1.0. Low confidence = be explicit about uncertainty.
 - reasoning_log: 2-3 short factual lines max.
 - commands: [] unless explicitly helpful (resurrect branch, open file).
@@ -83,6 +78,19 @@ class ExecutorAgent:
         """
         logger.info("Synthesizing answer for: %s", question)
 
+        # Fast deterministic path for latest-snapshot list queries.
+        # This avoids LLM latency/timeouts and prevents rigid template regressions.
+        if _is_latest_snapshot_plan(plan_result):
+            summary = _build_recent_snapshots_plain_summary(plan_result.retrieved_context)
+            return QueryResponse(
+                summary=summary,
+                reasoning_log=[
+                    "Used timeline-based fast path for latest snapshot query.",
+                    f"Returned {len(plan_result.retrieved_context)} snapshot(s) without LLM synthesis.",
+                ],
+                commands=[],
+            )
+
         # ── Step 1: Build context string from retrieved snapshots ─
         context_parts: list[str] = []
         for i, ctx in enumerate(plan_result.retrieved_context[:10]):
@@ -95,17 +103,6 @@ class ExecutorAgent:
                 f"  Code: {str(ctx.get('shadow_graph', ''))[:500]}\n"
             )
         context_block = "\n".join(context_parts) if context_parts else "No relevant context found."
-
-        if _is_latest_lookup_question(question) and plan_result.retrieved_context:
-            latest = plan_result.retrieved_context[0]
-            return QueryResponse(
-                summary=_build_latest_snapshot_bullet_summary(latest),
-                reasoning_log=[
-                    "Detected recency query in executor and normalized response format.",
-                    f"Selected snapshot id={latest.get('id', 'unknown')} timestamp={latest.get('timestamp', 'unknown')}",
-                ],
-                commands=[],
-            )
 
         # ── Step 2: Draft the answer ─────────────────────────────
         draft = await self._generate_draft(question, context_block)
@@ -161,10 +158,13 @@ class ExecutorAgent:
                     {"role": "user", "content": f"Question: {question}\n\nRetrieved Context:\n{context}"},
                 ],
                 temperature=0.3,
-                max_tokens=1200,
+                max_tokens=500,
             )
             raw = response.choices[0].message.content or "{}"
-            return json.loads(raw)
+            draft = json.loads(raw)
+            if isinstance(draft, dict) and isinstance(draft.get("summary"), str):
+                draft["summary"] = _sanitize_summary_text(draft["summary"])
+            return draft
         except Exception as exc:
             logger.error("Executor LLM draft call failed. Error: %s", exc, exc_info=True)
             return {"summary": f"Error generating answer: {str(exc)}", "confidence": 0.0}
@@ -195,66 +195,42 @@ class ExecutorAgent:
             return {"is_valid": True, "issues": [], "revised_confidence": 0.5}
 
 
-def _is_latest_lookup_question(question: str) -> bool:
-    q = (question or "").strip().lower()
-    if not q:
+def _sanitize_summary_text(summary: str) -> str:
+    text = (summary or "").strip()
+    lower = text.lower()
+
+    # Guardrail for legacy rigid formatting that users found unhelpful.
+    if lower.startswith("most recent snapshot"):
+        lines = [line.strip(" -\t") for line in text.splitlines() if line.strip()]
+        details: list[str] = []
+        for line in lines[1:]:
+            if ":" in line:
+                details.append(line)
+        if details:
+            return "Latest snapshot details: " + "; ".join(details)
+        return "Latest snapshot found."
+
+    return text
+
+
+def _is_latest_snapshot_plan(plan_result: PlanResult) -> bool:
+    if not plan_result.search_queries:
         return False
-    has_recency = bool(re.search(r"\b(latest|newest|most recent|recent|current|last|fetch latest)\b", q))
-    has_snapshot_context = bool(re.search(r"\b(snapshot|snapshots|timeline|context|update|edited|editing|file|commit|branch)\b", q))
-    return has_recency and has_snapshot_context
+    first_query = str(plan_result.search_queries[0] or "").strip().lower()
+    return first_query.startswith("latest_") and first_query.endswith("_snapshots")
 
 
-def _extract_work_context(snapshot: dict) -> str:
-    for key in ("summary", "shadow_graph", "document"):
-        value = str(snapshot.get(key) or "").strip()
-        if value:
-            normalized = " ".join(value.split())
-            return normalized[:180]
-    return "No work context available."
+def _build_recent_snapshots_plain_summary(snapshots: list[dict]) -> str:
+    if not snapshots:
+        return "No snapshots found yet."
 
-
-def _format_snapshot_timestamp_with_timezone(raw_timestamp: Any) -> str:
-    if raw_timestamp is None:
-        return "unknown time"
-
-    dt: datetime | None = None
-    if isinstance(raw_timestamp, (int, float)):
-        ts = float(raw_timestamp)
-        if ts > 1_000_000_000_000:
-            ts /= 1000.0
-        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-    elif isinstance(raw_timestamp, str):
-        value = raw_timestamp.strip()
-        if not value:
-            return "unknown time"
-        if value.endswith("Z"):
-            value = value[:-1] + "+00:00"
-        try:
-            dt = datetime.fromisoformat(value)
-        except Exception:
-            return str(raw_timestamp)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        return str(raw_timestamp)
-
-    tz_name = dt.tzname() or "UTC"
-    tz_offset = dt.strftime("%z")
-    if len(tz_offset) == 5:
-        tz_offset = f"{tz_offset[:3]}:{tz_offset[3:]}"
-    elif not tz_offset:
-        tz_offset = "+00:00"
-
-    return f"{dt.isoformat()} ({tz_name} {tz_offset})"
-
-
-def _build_latest_snapshot_bullet_summary(snapshot: dict) -> str:
-    return "\n".join(
-        [
-            "Most recent snapshot:",
-            f"- Work context: {_extract_work_context(snapshot)}",
-            f"- File: {snapshot.get('active_file') or 'an unknown file'}",
-            f"- Branch: {snapshot.get('git_branch') or 'unknown'}",
-            f"- Time: {_format_snapshot_timestamp_with_timezone(snapshot.get('timestamp'))}",
-        ]
-    )
+    lines = ["Latest snapshots:"]
+    for idx, snapshot in enumerate(snapshots[:10], start=1):
+        active_file = snapshot.get("active_file") or "unknown file"
+        git_branch = snapshot.get("git_branch") or "unknown branch"
+        timestamp = snapshot.get("timestamp") or "unknown time"
+        summary = str(snapshot.get("summary") or "No summary available").strip()
+        lines.append(
+            f"{idx}. {active_file} on {git_branch} at {timestamp} — {summary}"
+        )
+    return "\n".join(lines)

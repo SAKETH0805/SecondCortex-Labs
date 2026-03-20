@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from services.vector_db import VectorDBService
 from services.llm_client import task_chat_completion
 
 logger = logging.getLogger("secondcortex.planner")
 
-MAX_STEPS = 1  # Reduced from 3 to conserve API quota
+MAX_STEPS = 2
 
 PLANNER_SYSTEM_PROMPT = """\
 Break a developer question into 1-2 high-signal semantic searches for IDE snapshots.
@@ -33,6 +34,7 @@ Respond with ONLY valid JSON (no prose, no markdown):
 Rules:
 - Max 2 queries (prefer 1).
 - Include concrete anchors from question (file/error/branch/symbol).
+- Preserve numeric constraints from the question (e.g., "3 latest snapshots").
 - If vague, add 1 clarifying query for recent evidence.
 - temporal_scope: Narrowest scope that answers the question.
 - Return JSON only.
@@ -51,6 +53,19 @@ class PlannerAgent:
         Returns retrieved context chunks from Vector DB.
         """
         logger.info("Planning for question: %s", question)
+
+        # Snapshot recency/listing questions should use direct timeline retrieval,
+        # not semantic similarity, so counts and ordering are preserved.
+        if _is_snapshot_recency_query(question):
+            limit = _extract_requested_snapshot_count(question)
+            logger.info("Using timeline retrieval for snapshot recency query (limit=%d)", limit)
+            timeline = await self.vector_db.get_snapshot_timeline(limit=limit, user_id=user_id)
+            return PlanResult(
+                intent=f"Fetch latest {limit} snapshot(s)",
+                search_queries=[f"latest_{limit}_snapshots"],
+                temporal_scope="all_time",
+                retrieved_context=timeline,
+            )
 
         # ── Step 1: Generate the search plan via LLM ────────────
         plan = await self._generate_plan(question)
@@ -119,3 +134,33 @@ class PlanResult:
         self.search_queries = search_queries
         self.temporal_scope = temporal_scope
         self.retrieved_context = retrieved_context
+
+
+def _is_snapshot_recency_query(question: str) -> bool:
+    q = (question or "").strip().lower()
+    if not q:
+        return False
+
+    has_snapshot = bool(re.search(r"\b(snapshot|snapshots|timeline)\b", q))
+    has_recency = bool(re.search(r"\b(latest|newest|recent|last|most recent)\b", q))
+    return has_snapshot and has_recency
+
+
+def _extract_requested_snapshot_count(question: str) -> int:
+    q = (question or "").strip().lower()
+    if not q:
+        return 1
+
+    patterns = [
+        r"\b(\d{1,2})\s+(?:latest|newest|recent|last)\s+snapshots?\b",
+        r"\b(?:latest|newest|recent|last)\s+(\d{1,2})\s+snapshots?\b",
+        r"\bfetch\s+me\s+(\d{1,2})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, q)
+        if match:
+            return max(1, min(int(match.group(1)), 10))
+
+    if "snapshots" in q:
+        return 3
+    return 1
