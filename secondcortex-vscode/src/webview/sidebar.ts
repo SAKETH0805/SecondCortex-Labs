@@ -850,13 +850,25 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         // State persistence
         let state = vscode.getState() || { messages: [], sessionId: null, sessions: [] };
         let isAwaitingResponse = false;
+        let hasReceivedBackendData = false;
         
-        // Initial render from state (instant recovery)
-        if (state.messages && state.messages.length > 0) {
-            renderAllMessages(state.messages);
-        } else {
-            addMessage('assistant', 'Welcome! How can I help you today?', true);
-        }
+        // **AZURE OPENAI MIGRATION FIX**: Don't render stale cached state.
+        // Instead, always fetch fresh data from backend first.
+        // Show loading state while fetching.
+        const initialLoader = document.createElement('div');
+        initialLoader.className = 'msg-wrapper assistant loading-wrapper';
+        initialLoader.innerHTML = '<div class="msg loading">Loading your chat history...</div>';
+        chatLog.appendChild(initialLoader);
+        chatLog.scrollTop = chatLog.scrollHeight;
+
+        // Timeout fallback: if backend doesn't respond in 5 seconds, show welcome
+        const fallbackTimeout = window.setTimeout(() => {
+            const loader = chatLog.querySelector('.loading-wrapper');
+            if (loader && !hasReceivedBackendData) {
+                chatLog.innerHTML = '';
+                addMessage('assistant', 'Welcome! How can I help you today?', true);
+            }
+        }, 5000);
 
         // Fetch latest from backend to sync
         vscode.postMessage({ type: 'getHistory', sessionId: state.sessionId });
@@ -1030,6 +1042,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             switch (msg.type) {
                 case 'history':
+                    hasReceivedBackendData = true;
+                    window.clearTimeout(fallbackTimeout);
                     state.messages = msg.messages;
                     state.sessionId = msg.sessionId;
                     renderAllMessages(msg.messages);

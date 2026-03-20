@@ -39,6 +39,21 @@ export function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('SecondCortex');
     outputChannel.appendLine('[SecondCortex] Extension activating...');
 
+    // **AZURE OPENAI MIGRATION FIX**: Clear old cached state to force fresh backend fetch
+    // This ensures users see current data instead of snapshots from before migration
+    try {
+        const storageFile = context.globalStorageUri.fsPath;
+        const fs = require('fs');
+        const path = require('path');
+        const cacheFile = path.join(storageFile, 'offline-snapshots.json');
+        if (fs.existsSync(cacheFile)) {
+            fs.unlinkSync(cacheFile);
+            outputChannel.appendLine('[SecondCortex] Cleared old offline snapshot cache on activation.');
+        }
+    } catch (err) {
+        outputChannel.appendLine(`[SecondCortex] Warning: Could not clear snapshot cache: ${err}`);
+    }
+
     // Configuration
     const config = vscode.workspace.getConfiguration('secondcortex');
     const backendUrl = resolveConfiguredUrl(
