@@ -40,7 +40,6 @@ export default function SummaryWidget({
   teamId,
   userId,
   period,
-  context,
   token,
   backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://sc-backend-suhaan.azurewebsites.net',
 }: SummaryWidgetProps) {
@@ -97,12 +96,6 @@ export default function SummaryWidget({
     return <div className="text-xs text-slate-400">No data available</div>;
   }
 
-  const contextStyles = {
-    team: 'bg-slate-900 text-white',
-    pm: 'bg-blue-900 text-blue-50',
-    individual: 'bg-slate-800 text-slate-100',
-  };
-
   const members = summary.members ?? [];
   const activeMembers = summary.active_members ?? 0;
   const topMember = members.reduce<MemberSummary | null>((best, member) => {
@@ -139,25 +132,25 @@ export default function SummaryWidget({
       : 'This card summarizes your last 7 days of captured work.';
 
   return (
-    <div className={`space-y-3 text-sm ${contextStyles[context]}`}>
-      <div className="font-semibold text-slate-200">{title}</div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>{title}</div>
 
-      <p className="text-slate-200">{mainExplanation}</p>
-      <p className="text-slate-400">{periodExplanation}</p>
+      <p style={{ fontSize: '13px', color: 'var(--text)', margin: 0 }}>{mainExplanation}</p>
+      <p style={{ fontSize: '13px', color: 'var(--muted)', margin: 0 }}>{periodExplanation}</p>
 
-      <p className="text-slate-300">
+      <p style={{ fontSize: '13px', color: 'var(--text)', margin: 0 }}>
         {activeMembers} active member{activeMembers === 1 ? '' : 's'} in this period.
       </p>
 
-      <p className="text-slate-300">{memberExplanation}</p>
+      <p style={{ fontSize: '13px', color: 'var(--text)', margin: 0 }}>{memberExplanation}</p>
 
       {period === 'weekly' && weeklyPeakDay && (
-        <p className="text-slate-300">
+        <p style={{ fontSize: '13px', color: 'var(--text)', margin: 0 }}>
           Peak day this week: {weeklyPeakDay[0]} with {weeklyPeakDay[1]} snapshot{weeklyPeakDay[1] === 1 ? '' : 's'}.
         </p>
       )}
 
-      <div className="text-slate-500 text-xs border-t border-slate-700 pt-2">
+      <div style={{ fontSize: '11px', color: 'var(--muted)', borderTop: '1px solid var(--border)', paddingTop: '10px', marginTop: '4px' }}>
         Last updated at {new Date(summary.generated_at).toLocaleTimeString()}.
       </div>
     </div>
