@@ -146,6 +146,81 @@ class SummaryService:
             "generated_at": datetime.utcnow().isoformat(),
         }
 
+    def generate_user_daily_summary(self, user_id: str) -> dict:
+        """
+        Generate a daily summary for an individual user.
+        Returns dict compatible with summary response format.
+        """
+        user = self.user_db.get_user_by_id(user_id)
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+        
+        team_id = user.get("team_id")
+        
+        # Get snapshot count for today
+        snapshot_count = self._get_user_snapshot_count(user_id, days=1)
+        
+        # Get commits for today
+        commit_count = self._get_commit_count(user_id, days=1)
+        
+        # Get languages used today
+        languages = self._get_languages_used(user_id, days=1)
+        
+        # Get files modified today
+        files_modified = self._get_files_modified(user_id, days=1)
+        
+        return {
+            "user_id": user_id,
+            "period": "daily",
+            "total_snapshots": snapshot_count,
+            "total_commits": commit_count,
+            "languages_used": languages,
+            "files_modified": files_modified,
+            "generated_at": datetime.utcnow().isoformat(),
+        }
+
+    def generate_user_weekly_summary(self, user_id: str) -> dict:
+        """
+        Generate a weekly summary for an individual user.
+        Returns dict compatible with summary response format.
+        """
+        user = self.user_db.get_user_by_id(user_id)
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+        
+        team_id = user.get("team_id")
+        
+        # Get snapshot count for this week
+        snapshot_count = self._get_user_snapshot_count(user_id, days=7)
+        
+        # Get commits for this week
+        commit_count = self._get_commit_count(user_id, days=7)
+        
+        # Get languages used this week
+        languages = self._get_languages_used(user_id, days=7)
+        
+        # Get files modified this week
+        files_modified = self._get_files_modified(user_id, days=7)
+        
+        # Build daily breakdown for the week
+        daily_breakdown = {}
+        for i in range(7):
+            day = (datetime.utcnow() - timedelta(days=i)).strftime("%A")
+            count = self._get_user_snapshot_count_for_day(user_id, i)
+            daily_breakdown[day] = count
+        
+        return {
+            "user_id": user_id,
+            "period": "weekly",
+            "total_snapshots": snapshot_count,
+            "total_commits": commit_count,
+            "languages_used": languages,
+            "files_modified": files_modified,
+            "daily_breakdown": daily_breakdown,
+            "generated_at": datetime.utcnow().isoformat(),
+        }
+
+
     def _get_snapshot_count(self, user_id: str, team_id: str, days: int = 1) -> int:
         """Get snapshot count for a user in a team over N days."""
         cutoff = datetime.utcnow() - timedelta(days=days)
@@ -158,6 +233,21 @@ class SummaryService:
                 WHERE user_id = ? AND team_id = ? AND timestamp >= ?
                 """,
                 (user_id, team_id, cutoff_ts),
+            )
+            return cursor.fetchone()[0]
+
+    def _get_user_snapshot_count(self, user_id: str, days: int = 1) -> int:
+        """Get snapshot count for an individual user over N days (any team)."""
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff_ts = int(cutoff.timestamp())
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                SELECT COUNT(*) FROM synced_snapshots 
+                WHERE user_id = ? AND timestamp >= ?
+                """,
+                (user_id, cutoff_ts),
             )
             return cursor.fetchone()[0]
 
@@ -201,5 +291,21 @@ class SummaryService:
                 WHERE team_id = ? AND timestamp BETWEEN ? AND ?
                 """,
                 (team_id, day_start_ts, day_end_ts),
+            )
+            return cursor.fetchone()[0]
+
+    def _get_user_snapshot_count_for_day(self, user_id: str, days_ago: int) -> int:
+        """Get snapshot count for a user for a specific day N days ago."""
+        target_date = datetime.utcnow() - timedelta(days=days_ago)
+        day_start_ts = int(target_date.replace(hour=0, minute=0, second=0).timestamp())
+        day_end_ts = int(target_date.replace(hour=23, minute=59, second=59).timestamp())
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                SELECT COUNT(*) FROM synced_snapshots 
+                WHERE user_id = ? AND timestamp BETWEEN ? AND ?
+                """,
+                (user_id, day_start_ts, day_end_ts),
             )
             return cursor.fetchone()[0]

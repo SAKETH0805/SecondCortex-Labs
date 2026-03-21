@@ -77,7 +77,7 @@ async def get_user_daily_summary(user_id: str, current_user: str = Depends(get_c
         if team_info["team_lead_id"] != current_user:
             raise HTTPException(status_code=403, detail="Only team lead can view member summaries")
     
-    summary = summary_service.generate_daily_summary(user_id)
+    summary = summary_service.generate_user_daily_summary(user_id)
     return summary
 
 
@@ -90,5 +90,5 @@ async def get_user_weekly_summary(user_id: str, current_user: str = Depends(get_
     if user_id != current_user:
         raise HTTPException(status_code=403, detail="You can only view your own summary")
     
-    summary = summary_service.generate_weekly_summary(user_id)
+    summary = summary_service.generate_user_weekly_summary(user_id)
     return summary
