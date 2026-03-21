@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from auth.database import UserDB
-from auth.jwt_handler import get_current_user
+from auth.jwt_handler import get_current_principal, get_current_user
 
 logger = logging.getLogger("secondcortex.teams.routes")
 
@@ -65,6 +65,26 @@ class MemberSnapshot(BaseModel):
     enriched_context: dict
     timestamp: int
     synced: int
+
+
+def _authorize_team_read(team_id: str, principal: dict, user_db: UserDB) -> None:
+    """Allow team read for same-team users or restricted pm_guest tokens."""
+    role = str(principal.get("role") or "user")
+    if role == "pm_guest":
+        scopes = principal.get("scopes") or []
+        if isinstance(scopes, str):
+            scopes = [scopes]
+        if "pm:read" not in set(str(scope) for scope in scopes):
+            raise HTTPException(status_code=403, detail="PM guest token lacks read scope.")
+        guest_team_id = str(principal.get("team_id") or "")
+        if guest_team_id != team_id:
+            raise HTTPException(status_code=403, detail="PM guest token is not authorized for this team.")
+        return
+
+    user_id = str(principal.get("sub") or "")
+    user = user_db.get_user_by_id(user_id)
+    if not user or user.get("team_id") != team_id:
+        raise HTTPException(status_code=403, detail="You are not a member of this team")
 
 
 @router.post("", response_model=CreateTeamResponse)
@@ -121,27 +141,17 @@ async def join_team(req: JoinTeamRequest, user_id: str = Depends(get_current_use
 
 
 @router.get("/{team_id}/members", response_model=list[TeamMemberInfo])
-async def get_team_members(team_id: str, user_id: str = Depends(get_current_user)):
+async def get_team_members(team_id: str, principal: dict = Depends(get_current_principal)):
     """Get all members of a team. User must be in the team."""
-    user = user_db.get_user_by_id(user_id)
-    
-    # Verify user is in this team
-    if user.get("team_id") != team_id:
-        raise HTTPException(status_code=403, detail="You are not a member of this team")
-    
+    _authorize_team_read(team_id, principal, user_db)
     members = user_db.get_team_members(team_id)
     return [TeamMemberInfo(**m) for m in members]
 
 
 @router.get("/{team_id}", response_model=TeamInfo)
-async def get_team_info(team_id: str, user_id: str = Depends(get_current_user)):
+async def get_team_info(team_id: str, principal: dict = Depends(get_current_principal)):
     """Get team info. User must be in the team."""
-    user = user_db.get_user_by_id(user_id)
-    
-    # Verify user is in this team
-    if user.get("team_id") != team_id:
-        raise HTTPException(status_code=403, detail="You are not a member of this team")
-    
+    _authorize_team_read(team_id, principal, user_db)
     team_info = user_db.get_team_info(team_id)
     if not team_info:
         raise HTTPException(status_code=404, detail="Team not found")
@@ -175,22 +185,21 @@ async def get_member_snapshots(
     team_id: str,
     member_id: str,
     limit: int = 1000,
-    user_id: str = Depends(get_current_user),
+    principal: dict = Depends(get_current_principal),
 ):
     """
     Return full IDE snapshot history for one team member.
     User must belong to the same team.
     """
-    requester = user_db.get_user_by_id(user_id)
     member = user_db.get_user_by_id(member_id)
 
-    if not requester or not member:
+    if not member:
         raise HTTPException(status_code=404, detail="User not found")
 
-    requester_team = requester.get("team_id")
     member_team = member.get("team_id")
-    if requester_team != team_id or member_team != team_id:
-        raise HTTPException(status_code=403, detail="Not authorized to view this member history")
+    _authorize_team_read(team_id, principal, user_db)
+    if member_team != team_id:
+        raise HTTPException(status_code=403, detail="Target member is not part of this team")
 
     rows = user_db.get_user_snapshots(member_id, limit=limit)
     snapshots: list[MemberSnapshot] = []

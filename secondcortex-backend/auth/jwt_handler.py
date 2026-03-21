@@ -36,6 +36,22 @@ def create_token(user_id: str, email: str) -> str:
     return jwt.encode(payload, _get_secret(), algorithm=ALGORITHM)
 
 
+def create_pm_guest_token(team_id: str, display_name: str | None = None) -> str:
+    """Create a restricted PM guest token with read/chat-only scope."""
+    now = int(time.time())
+    payload = {
+        "sub": f"pm_guest:{team_id}",
+        "email": settings.pm_guest_email,
+        "display_name": display_name or settings.pm_guest_display_name,
+        "role": "pm_guest",
+        "team_id": team_id,
+        "scopes": ["pm:read", "pm:chat"],
+        "iat": now,
+        "exp": now + max(300, int(settings.pm_guest_token_expiry_seconds)),
+    }
+    return jwt.encode(payload, _get_secret(), algorithm=ALGORITHM)
+
+
 def verify_token(token: str) -> dict | None:
     """Verify and decode a JWT token. Returns payload or None."""
     try:
@@ -53,12 +69,13 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
-async def get_current_user(
+
+async def get_current_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> str:
+) -> dict:
     """
-    Validates the Bearer JWT token and returns the user_id.
-    Every protected endpoint requires a valid token.
+    Validates Bearer JWT and returns the decoded payload.
+    Supports both normal user tokens and restricted PM guest tokens.
     """
     if credentials is None:
         raise HTTPException(status_code=401, detail="Missing Authorization header. Please log in.")
@@ -66,5 +83,22 @@ async def get_current_user(
     payload = verify_token(credentials.credentials)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired token. Please log in again.")
-    
-    return payload.get("sub")
+
+    return payload
+
+async def get_current_user(
+    principal: dict = Depends(get_current_principal),
+) -> str:
+    """
+    Validates the Bearer JWT token and returns the user_id.
+    Rejects restricted PM guest tokens for standard user-only endpoints.
+    """
+    role = str(principal.get("role") or "user")
+    if role == "pm_guest":
+        raise HTTPException(status_code=403, detail="PM guest token is restricted for this endpoint.")
+
+    user_id = principal.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload.")
+
+    return str(user_id)

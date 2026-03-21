@@ -95,6 +95,11 @@ class Settings(BaseSettings):
 
     # JWT auth
     jwt_secret: str = Field("", validation_alias="JWT_SECRET")
+    pm_guest_enabled: bool = Field(True, validation_alias="PM_GUEST_ENABLED")
+    pm_guest_team_id: str = Field("", validation_alias="PM_GUEST_TEAM_ID")
+    pm_guest_display_name: str = Field("PM Guest", validation_alias="PM_GUEST_DISPLAY_NAME")
+    pm_guest_email: str = Field("pm-guest@secondcortex.local", validation_alias="PM_GUEST_EMAIL")
+    pm_guest_token_expiry_seconds: int = Field(8 * 3600, validation_alias="PM_GUEST_TOKEN_EXPIRY_SECONDS")
 
     # Server
     host: str = "0.0.0.0"
