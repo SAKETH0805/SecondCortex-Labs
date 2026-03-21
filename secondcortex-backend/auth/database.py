@@ -368,6 +368,40 @@ class UserDB:
         all_rows.sort(key=lambda r: int(r.get("timestamp") or 0), reverse=True)
         return all_rows
 
+    def get_user_snapshots(self, user_id: str, limit: int = 1000) -> list[dict]:
+        """Return one user's synced snapshots, newest first."""
+        capped_limit = max(1, min(limit, 5000))
+        rows: list[dict] = []
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                SELECT id, user_id, team_id, workspace, active_file, git_branch,
+                          terminal_commands, summary, enriched_context, timestamp, synced
+                FROM synced_snapshots
+                WHERE user_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (user_id, capped_limit),
+            )
+            for row in cursor.fetchall():
+                rows.append({
+                    "id": row[0],
+                    "user_id": row[1],
+                    "team_id": row[2],
+                    "workspace": row[3],
+                    "active_file": row[4],
+                    "git_branch": row[5],
+                    "terminal_commands": row[6],
+                    "summary": row[7],
+                    "enriched_context": row[8],
+                    "timestamp": row[9],
+                    "synced": row[10],
+                })
+
+        return rows
+
     def get_sync_checkpoint(self, user_id: str) -> int:
         """Checkpoint = max timestamp visible to user in team scope."""
         snapshots = self.get_team_snapshots(user_id=user_id, per_member_limit=500)

@@ -36,28 +36,23 @@ export default function AuthGate() {
     const pmQuery = searchParams.get('pm') === 'true';
     const guestQuery = searchParams.get('guest') === 'true';
     const storedPmGuest = localStorage.getItem('sc_pm_guest_mode') === 'true';
-    const storedPmAuth = localStorage.getItem('sc_pm_mode') === 'auth';
-
-    if ((pmQuery && guestQuery) || storedPmGuest) {
-      setSessionMode('pm');
-      setIsPmGuest(true);
-      setToken('pm_guest_session');
-      setActiveTab('dashboard');
-      setIsChecking(false);
-      return;
-    }
+    const storedPmAuth = localStorage.getItem('sc_pm_mode') === 'auth' || storedPmGuest;
 
     const storedToken = localStorage.getItem('sc_jwt_token');
     if (!storedToken) {
-      router.push('/login');
+      router.push('/');
       setIsChecking(false);
       return;
     }
 
     const nextMode: SessionMode = pmQuery || storedPmAuth ? 'pm' : 'developer';
+    const nextGuest = nextMode === 'pm' && (guestQuery || storedPmGuest);
     setSessionMode(nextMode);
-    setIsPmGuest(false);
+    setIsPmGuest(nextGuest);
     setToken(storedToken);
+    if (nextGuest) {
+      setActiveTab('dashboard');
+    }
 
     if (nextMode === 'developer') {
       fetchMcpKey(storedToken);

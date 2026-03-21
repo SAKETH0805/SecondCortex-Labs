@@ -18,11 +18,48 @@ export default function LandingPage() {
   const [isPmSubmitting, setIsPmSubmitting] = useState(false);
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "https://sc-backend-suhaan.azurewebsites.net";
 
-  const handlePmGuestLogin = () => {
-    localStorage.setItem("sc_pm_guest_mode", "true");
-    localStorage.removeItem("sc_pm_mode");
+  const loginPmSession = async (email: string, password: string, guestMode: boolean) => {
+    const res = await fetch(`${backendUrl}/api/v1/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "PM login failed. Please check credentials.");
+    }
+
+    const data = await res.json();
+    localStorage.setItem("sc_jwt_token", data.token);
+    localStorage.setItem("sc_pm_mode", "auth");
+    if (guestMode) {
+      localStorage.setItem("sc_pm_guest_mode", "true");
+      router.push("/live?pm=true&guest=true");
+    } else {
+      localStorage.removeItem("sc_pm_guest_mode");
+      router.push("/live?pm=true");
+    }
     setShowPmModal(false);
-    router.push("/live?pm=true&guest=true");
+  };
+
+  const handlePmGuestLogin = async () => {
+    const guestEmail = (process.env.NEXT_PUBLIC_PM_GUEST_EMAIL || pmEmail).trim();
+    const guestPassword = process.env.NEXT_PUBLIC_PM_GUEST_PASSWORD || pmPassword;
+    if (!guestEmail || !guestPassword) {
+      setPmError("Enter PM credentials first, or configure guest credentials in environment variables.");
+      return;
+    }
+
+    setIsPmSubmitting(true);
+    setPmError("");
+    try {
+      await loginPmSession(guestEmail, guestPassword, true);
+    } catch (err) {
+      setPmError(err instanceof Error ? err.message : "Guest PM login failed.");
+    } finally {
+      setIsPmSubmitting(false);
+    }
   };
 
   const handlePmLogin = async (event: FormEvent<HTMLFormElement>) => {
@@ -37,26 +74,9 @@ export default function LandingPage() {
     setPmError("");
 
     try {
-      const res = await fetch(`${backendUrl}/api/v1/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password: pmPassword }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        setPmError(err.detail || "PM login failed. Please check credentials.");
-        return;
-      }
-
-      const data = await res.json();
-      localStorage.setItem("sc_jwt_token", data.token);
-      localStorage.setItem("sc_pm_mode", "auth");
-      localStorage.removeItem("sc_pm_guest_mode");
-      setShowPmModal(false);
-      router.push("/live?pm=true");
-    } catch {
-      setPmError("Cannot reach backend. Check your network and try again.");
+      await loginPmSession(email, pmPassword, false);
+    } catch (err) {
+      setPmError(err instanceof Error ? err.message : "Cannot reach backend. Check your network and try again.");
     } finally {
       setIsPmSubmitting(false);
     }
@@ -961,9 +981,10 @@ export default function LandingPage() {
               <button
                 type="button"
                 className="btn-secondary sc-auth-submit sc-guest-btn"
+                disabled={isPmSubmitting}
                 onClick={handlePmGuestLogin}
               >
-                Guest Login
+                {isPmSubmitting ? "Please wait..." : "Guest Login"}
               </button>
             </form>
           </div>
