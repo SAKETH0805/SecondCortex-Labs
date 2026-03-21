@@ -103,74 +103,56 @@ export default function SummaryWidget({
     individual: 'bg-slate-800 text-slate-100',
   };
 
+  const members = summary.members ?? [];
+  const activeMembers = summary.active_members ?? 0;
+  const topMember = members.reduce<MemberSummary | null>((best, member) => {
+    if (!best || member.snapshots_count > best.snapshots_count) {
+      return member;
+    }
+    return best;
+  }, null);
+
+  const weeklyPeakDay = summary.daily_breakdown
+    ? Object.entries(summary.daily_breakdown).reduce<[string, number]>((best, entry) => {
+        return entry[1] > best[1] ? entry : best;
+      }, ['none', 0])
+    : null;
+
+  const title = period === 'daily' ? 'Today' : 'This Week';
+  const mainExplanation =
+    period === 'daily'
+      ? summary.total_snapshots > 0
+        ? `You captured ${summary.total_snapshots} snapshot${summary.total_snapshots === 1 ? '' : 's'} today.`
+        : 'No snapshots have been captured today yet.'
+      : `You captured ${summary.total_snapshots} snapshot${summary.total_snapshots === 1 ? '' : 's'} this week.`;
+
+  const memberExplanation =
+    members.length > 0
+      ? topMember
+        ? `${topMember.display_name} contributed the most with ${topMember.snapshots_count} snapshot${topMember.snapshots_count === 1 ? '' : 's'}.`
+        : 'Member activity is available for this period.'
+      : 'No member-level activity is available for this period.';
+
   return (
-    <div className={`space-y-3 text-xs ${contextStyles[context]}`}>
-      <div className="space-y-1">
-        <div className="font-semibold text-slate-300">
-          {period === 'daily' ? 'Today' : 'This Week'}
-        </div>
-        <div className="text-2xl font-bold">
-          {summary.total_snapshots}
-        </div>
-        <div className="text-slate-400">snapshots</div>
-      </div>
+    <div className={`space-y-3 text-sm ${contextStyles[context]}`}>
+      <div className="font-semibold text-slate-200">{title}</div>
 
-      {summary.active_members !== undefined && (
-        <div className="space-y-1 border-t border-slate-700 pt-3">
-          <div className="text-slate-300">Active Members</div>
-          <div className="text-xl font-bold">
-            {summary.active_members}
-          </div>
-        </div>
-      )}
+      <p className="text-slate-200">{mainExplanation}</p>
 
-      {summary.members && summary.members.length > 0 && (
-        <div className="border-t border-slate-700 pt-3">
-          <div className="text-slate-300 mb-2">Members</div>
-          <div className="space-y-1 max-h-48 overflow-y-auto">
-            {summary.members.map((member: MemberSummary) => (
-              <div
-                key={member.user_id}
-                className={`p-2 rounded ${
-                  member.status === 'active'
-                    ? 'bg-green-900 bg-opacity-20'
-                    : 'bg-slate-700 bg-opacity-30'
-                }`}
-              >
-                <div className="font-semibold truncate">
-                  {member.display_name}
-                </div>
-                <div className="text-slate-400">
-                  {member.snapshots_count} snapshots
-                  {member.commits_count > 0 && `, ${member.commits_count} commits`}
-                </div>
-                {member.languages_used.length > 0 && (
-                  <div className="text-slate-500 mt-1">
-                    {member.languages_used.join(', ')}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <p className="text-slate-300">
+        {activeMembers} active member{activeMembers === 1 ? '' : 's'} in this period.
+      </p>
 
-      {summary.daily_breakdown && period === 'weekly' && (
-        <div className="border-t border-slate-700 pt-3">
-          <div className="text-slate-300 mb-2">Daily Breakdown</div>
-          <div className="space-y-1 text-slate-400">
-            {Object.entries(summary.daily_breakdown).map(([day, count]) => (
-              <div key={day} className="flex justify-between">
-                <span>{day}</span>
-                <span className="text-green-400 font-semibold">{count}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+      <p className="text-slate-300">{memberExplanation}</p>
+
+      {period === 'weekly' && weeklyPeakDay && (
+        <p className="text-slate-300">
+          Peak day this week: {weeklyPeakDay[0]} with {weeklyPeakDay[1]} snapshot{weeklyPeakDay[1] === 1 ? '' : 's'}.
+        </p>
       )}
 
       <div className="text-slate-500 text-xs border-t border-slate-700 pt-2">
-        Updated {new Date(summary.generated_at).toLocaleTimeString()}
+        Last updated at {new Date(summary.generated_at).toLocaleTimeString()}.
       </div>
     </div>
   );
