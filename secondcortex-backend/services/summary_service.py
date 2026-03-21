@@ -149,7 +149,7 @@ class SummaryService:
     def generate_user_daily_summary(self, user_id: str) -> dict:
         """
         Generate a daily summary for an individual user.
-        Returns dict compatible with summary response format.
+        Returns dict compatible with summary response format with single-member array.
         """
         user = self.user_db.get_user_by_id(user_id)
         if not user:
@@ -169,20 +169,33 @@ class SummaryService:
         # Get files modified today
         files_modified = self._get_files_modified(user_id, days=1)
         
+        is_active = snapshot_count > 0 or commit_count > 0
+        
+        member_summary = MemberSummary(
+            user_id=user_id,
+            display_name=user.get("display_name", user_id),
+            email=user.get("email", ""),
+            snapshots_count=snapshot_count,
+            commits_count=commit_count,
+            languages_used=languages,
+            files_modified=files_modified,
+            status="active" if is_active else "idle",
+        )
+        
         return {
             "user_id": user_id,
             "period": "daily",
+            "members": [member_summary.model_dump()],
             "total_snapshots": snapshot_count,
             "total_commits": commit_count,
-            "languages_used": languages,
-            "files_modified": files_modified,
+            "active_members": 1 if is_active else 0,
             "generated_at": datetime.utcnow().isoformat(),
         }
 
     def generate_user_weekly_summary(self, user_id: str) -> dict:
         """
         Generate a weekly summary for an individual user.
-        Returns dict compatible with summary response format.
+        Returns dict compatible with summary response format with single-member array.
         """
         user = self.user_db.get_user_by_id(user_id)
         if not user:
@@ -202,6 +215,19 @@ class SummaryService:
         # Get files modified this week
         files_modified = self._get_files_modified(user_id, days=7)
         
+        is_active = snapshot_count > 0 or commit_count > 0
+        
+        member_summary = MemberSummary(
+            user_id=user_id,
+            display_name=user.get("display_name", user_id),
+            email=user.get("email", ""),
+            snapshots_count=snapshot_count,
+            commits_count=commit_count,
+            languages_used=languages,
+            files_modified=files_modified,
+            status="active" if is_active else "idle",
+        )
+        
         # Build daily breakdown for the week
         daily_breakdown = {}
         for i in range(7):
@@ -212,10 +238,10 @@ class SummaryService:
         return {
             "user_id": user_id,
             "period": "weekly",
+            "members": [member_summary.model_dump()],
             "total_snapshots": snapshot_count,
             "total_commits": commit_count,
-            "languages_used": languages,
-            "files_modified": files_modified,
+            "active_members": 1 if is_active else 0,
             "daily_breakdown": daily_breakdown,
             "generated_at": datetime.utcnow().isoformat(),
         }
