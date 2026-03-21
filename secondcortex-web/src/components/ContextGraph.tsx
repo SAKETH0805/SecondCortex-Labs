@@ -264,14 +264,14 @@ export default function ContextGraph({
         }
 
         let cancelled = false;
-        let eventSource: EventSource | null = null;
 
-        const startWatch = async () => {
+        const pollTimeline = async () => {
             try {
-                const authRes = await fetch(`${backendUrl}/api/sync/checkpoint`, {
+                const response = await fetch(`${backendUrl}/api/v1/snapshots/timeline?limit=500`, {
                     headers: { Authorization: `Bearer ${token}` },
                 });
-                if (authRes.status === 401 || authRes.status === 403) {
+
+                if (response.status === 401 || response.status === 403) {
                     setIsConnected(false);
                     if (onUnauthorized) {
                         onUnauthorized();
@@ -279,50 +279,36 @@ export default function ContextGraph({
                     return;
                 }
 
-                if (!authRes.ok || cancelled) {
+                if (!response.ok || cancelled) {
                     setIsConnected(false);
                     return;
                 }
 
-                const watchUrl = `${backendUrl}/api/sync/watch?token=${encodeURIComponent(token)}&after=0`;
-                eventSource = new EventSource(watchUrl);
+                const data = await response.json() as { timeline?: SnapshotEvent[] };
+                const nextTimeline = Array.isArray(data.timeline) ? data.timeline : [];
 
-                eventSource.onopen = () => {
-                    setIsConnected(true);
-                };
+                setTimeline(nextTimeline);
+                setIsConnected(true);
 
-                eventSource.addEventListener('team_snapshots', (event) => {
-                    const message = event as MessageEvent;
-                    try {
-                        const parsed = JSON.parse(message.data) as { rows?: SnapshotEvent[] };
-                        const nextTimeline = Array.isArray(parsed.rows) ? parsed.rows : [];
-                        setTimeline(nextTimeline.slice().reverse());
-                        if (nextTimeline.length > 0) {
-                            setSelectedIndex((prevIndex) => {
-                                if (!isPinnedInPast) {
-                                    return nextTimeline.length - 1;
-                                }
-                                return Math.min(prevIndex, nextTimeline.length - 1);
-                            });
+                if (nextTimeline.length > 0) {
+                    setSelectedIndex((prevIndex) => {
+                        if (!isPinnedInPast) {
+                            return nextTimeline.length - 1;
                         }
-                    } catch {
-                        // ignore malformed SSE payload
-                    }
-                });
-
-                eventSource.onerror = () => {
-                    setIsConnected(false);
-                };
+                        return Math.min(prevIndex, nextTimeline.length - 1);
+                    });
+                }
             } catch {
                 setIsConnected(false);
             }
         };
 
-        startWatch();
+        pollTimeline();
+        const intervalId = window.setInterval(pollTimeline, 4000);
 
         return () => {
             cancelled = true;
-            eventSource?.close();
+            window.clearInterval(intervalId);
         };
     }, [backendUrl, token, onUnauthorized, isPinnedInPast]);
 

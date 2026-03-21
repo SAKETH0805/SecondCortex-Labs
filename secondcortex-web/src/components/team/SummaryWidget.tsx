@@ -27,6 +27,7 @@ interface SummaryWidgetProps {
   period: 'daily' | 'weekly';
   context: 'team' | 'pm' | 'individual'; // Determines styling and data shown
   token: string;
+  backendUrl?: string;
 }
 
 /**
@@ -41,6 +42,7 @@ export default function SummaryWidget({
   period,
   context,
   token,
+  backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://sc-backend-suhaan.azurewebsites.net',
 }: SummaryWidgetProps) {
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -61,7 +63,7 @@ export default function SummaryWidget({
           return;
         }
 
-        const response = await fetch(endpoint, {
+        const response = await fetch(`${backendUrl}${endpoint}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
 
@@ -81,7 +83,7 @@ export default function SummaryWidget({
     if (token) {
       fetchSummary();
     }
-  }, [teamId, userId, period, token]);
+  }, [teamId, userId, period, token, backendUrl]);
 
   if (loading) {
     return <div className="text-xs text-slate-400">Loading summary...</div>;
