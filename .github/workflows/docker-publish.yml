@@ -8,6 +8,7 @@ env:
   REGISTRY: ghcr.io
   BACKEND_IMAGE: ghcr.io/syed-suhaan/secondcortex-backend
   FRONTEND_IMAGE: ghcr.io/syed-suhaan/secondcortex-frontend
+  IMAGE_TAG: ${{ github.sha }}
 
 jobs:
   build-and-push:
@@ -32,14 +33,18 @@ jobs:
         with:
           context: ./secondcortex-backend
           push: true
-          tags: ${{ env.BACKEND_IMAGE }}:latest
+          tags: |
+            ${{ env.BACKEND_IMAGE }}:latest
+            ${{ env.BACKEND_IMAGE }}:${{ env.IMAGE_TAG }}
 
       - name: Build and push Frontend image
         uses: docker/build-push-action@v6
         with:
           context: ./secondcortex-web
           push: true
-          tags: ${{ env.FRONTEND_IMAGE }}:latest
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:latest
+            ${{ env.FRONTEND_IMAGE }}:${{ env.IMAGE_TAG }}
           build-args: |
             NEXT_PUBLIC_BACKEND_URL=https://sc-backend-suhaan.azurewebsites.net
 
@@ -55,14 +60,14 @@ jobs:
         with:
           app-name: sc-backend-suhaan
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE_BACKEND }}
-          images: ${{ env.BACKEND_IMAGE }}:latest
+          images: ${{ env.BACKEND_IMAGE }}:${{ env.IMAGE_TAG }}
 
       - name: Deploy Frontend to Azure App Service
         uses: azure/webapps-deploy@v3
         with:
           app-name: sc-frontend-suhaan
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE_FRONTEND }}
-          images: ${{ env.FRONTEND_IMAGE }}:latest
+          images: ${{ env.FRONTEND_IMAGE }}:${{ env.IMAGE_TAG }}
 
       - name: Backend health check
         shell: bash
