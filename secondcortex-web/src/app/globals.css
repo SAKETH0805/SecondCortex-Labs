@@ -1388,6 +1388,21 @@ footer {
   font-size: 11px;
 }
 
+.sc-app-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-left: auto;
+}
+
+.sc-mcp-btn {
+  padding: 10px 14px;
+  font-size: 11px;
+  white-space: nowrap;
+  margin-left: auto;
+  order: -1;
+}
+
 .sc-app-content {
   padding-top: 86px;
   min-height: 100vh;
