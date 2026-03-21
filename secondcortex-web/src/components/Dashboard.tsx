@@ -13,8 +13,23 @@ interface DashboardProps {
 
 interface Stats {
     totalSnapshots: number;
-    lastSnapshotTime: string | null;
+    lastSnapshotTime: string | number | null;
     activeProject: string;
+}
+
+function toTimestampMs(value: string | number | null | undefined): number {
+    if (typeof value === 'number') {
+        return value > 1_000_000_000_000 ? value : value * 1000;
+    }
+    if (typeof value === 'string') {
+        const numeric = Number(value);
+        if (!Number.isNaN(numeric) && Number.isFinite(numeric)) {
+            return numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
+        }
+        const parsed = Date.parse(value);
+        return Number.isNaN(parsed) ? 0 : parsed;
+    }
+    return 0;
 }
 
 function getUserIdFromToken(token: string): string | null {
@@ -39,10 +54,6 @@ export default function Dashboard({
     mode = 'developer',
     isGuestPm = false,
 }: DashboardProps) {
-    if (mode === 'pm') {
-        return <PMGuestDashboard token={token} isGuestPm={isGuestPm} backendUrl={backendUrl} />;
-    }
-
     const userId = getUserIdFromToken(token);
     const [stats, setStats] = useState<Stats>({
         totalSnapshots: 0,
@@ -58,7 +69,12 @@ export default function Dashboard({
             if (res.ok) {
                 const data = await res.json();
                 if (data.timeline && data.timeline.length > 0) {
-                    const latest = data.timeline[data.timeline.length - 1];
+                    const sortedTimeline = data.timeline.slice().sort((a: { timestamp: string | number }, b: { timestamp: string | number }) => {
+                        const aTs = toTimestampMs(a.timestamp);
+                        const bTs = toTimestampMs(b.timestamp);
+                        return bTs - aTs;
+                    });
+                    const latest = sortedTimeline[0];
                     setStats(prev => ({
                         ...prev,
                         totalSnapshots: data.timeline.length,
@@ -78,10 +94,18 @@ export default function Dashboard({
     }, [backendUrl, token]);
 
     useEffect(() => {
+        if (mode === 'pm') {
+            return;
+        }
+
         fetchStats();
         const intervalId = window.setInterval(fetchStats, 5000);
         return () => window.clearInterval(intervalId);
-    }, [fetchStats]);
+    }, [fetchStats, mode]);
+
+    if (mode === 'pm') {
+        return <PMGuestDashboard token={token} isGuestPm={isGuestPm} backendUrl={backendUrl} />;
+    }
 
     return (
         <div className="sc-dashboard-wrap">
@@ -96,7 +120,7 @@ export default function Dashboard({
                     <StatCard 
                         title="Memory Snapshots" 
                         value={stats.totalSnapshots.toString()} 
-                        subtitle={stats.lastSnapshotTime ? `Last update: ${new Date(stats.lastSnapshotTime).toLocaleTimeString()}` : "No snapshots yet"} 
+                        subtitle={stats.lastSnapshotTime ? `Last update: ${new Date(toTimestampMs(stats.lastSnapshotTime)).toLocaleTimeString()}` : "No snapshots yet"} 
                         icon="storage"
                     />
                     <StatCard 

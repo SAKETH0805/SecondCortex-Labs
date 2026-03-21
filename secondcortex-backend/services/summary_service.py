@@ -251,14 +251,19 @@ class SummaryService:
         """Get snapshot count for a user in a team over N days."""
         cutoff = datetime.utcnow() - timedelta(days=days)
         cutoff_ts = int(cutoff.timestamp())
+        cutoff_ms = cutoff_ts * 1000
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
-                SELECT COUNT(*) FROM synced_snapshots 
-                WHERE user_id = ? AND team_id = ? AND timestamp >= ?
+                SELECT COUNT(*) FROM synced_snapshots
+                WHERE user_id = ? AND team_id = ?
+                  AND (
+                    (timestamp < 1000000000000 AND timestamp >= ?)
+                    OR (timestamp >= 1000000000000 AND timestamp >= ?)
+                  )
                 """,
-                (user_id, team_id, cutoff_ts),
+                (user_id, team_id, cutoff_ts, cutoff_ms),
             )
             return cursor.fetchone()[0]
 
@@ -266,14 +271,19 @@ class SummaryService:
         """Get snapshot count for an individual user over N days (any team)."""
         cutoff = datetime.utcnow() - timedelta(days=days)
         cutoff_ts = int(cutoff.timestamp())
+        cutoff_ms = cutoff_ts * 1000
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
-                SELECT COUNT(*) FROM synced_snapshots 
-                WHERE user_id = ? AND timestamp >= ?
+                SELECT COUNT(*) FROM synced_snapshots
+                WHERE user_id = ?
+                  AND (
+                    (timestamp < 1000000000000 AND timestamp >= ?)
+                    OR (timestamp >= 1000000000000 AND timestamp >= ?)
+                  )
                 """,
-                (user_id, cutoff_ts),
+                (user_id, cutoff_ts, cutoff_ms),
             )
             return cursor.fetchone()[0]
 
@@ -293,14 +303,19 @@ class SummaryService:
         """Get count of unique files modified by user in N days."""
         cutoff = datetime.utcnow() - timedelta(days=days)
         cutoff_ts = int(cutoff.timestamp())
+        cutoff_ms = cutoff_ts * 1000
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
-                SELECT COUNT(DISTINCT active_file) FROM synced_snapshots 
-                WHERE user_id = ? AND timestamp >= ?
+                SELECT COUNT(DISTINCT active_file) FROM synced_snapshots
+                WHERE user_id = ?
+                  AND (
+                    (timestamp < 1000000000000 AND timestamp >= ?)
+                    OR (timestamp >= 1000000000000 AND timestamp >= ?)
+                  )
                 """,
-                (user_id, cutoff_ts),
+                (user_id, cutoff_ts, cutoff_ms),
             )
             return cursor.fetchone()[0]
 
@@ -309,14 +324,20 @@ class SummaryService:
         target_date = datetime.utcnow() - timedelta(days=days_ago)
         day_start_ts = int(target_date.replace(hour=0, minute=0, second=0).timestamp())
         day_end_ts = int(target_date.replace(hour=23, minute=59, second=59).timestamp())
+        day_start_ms = day_start_ts * 1000
+        day_end_ms = day_end_ts * 1000
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
-                SELECT COUNT(*) FROM synced_snapshots 
-                WHERE team_id = ? AND timestamp BETWEEN ? AND ?
+                SELECT COUNT(*) FROM synced_snapshots
+                WHERE team_id = ?
+                  AND (
+                    (timestamp < 1000000000000 AND timestamp BETWEEN ? AND ?)
+                    OR (timestamp >= 1000000000000 AND timestamp BETWEEN ? AND ?)
+                  )
                 """,
-                (team_id, day_start_ts, day_end_ts),
+                (team_id, day_start_ts, day_end_ts, day_start_ms, day_end_ms),
             )
             return cursor.fetchone()[0]
 
@@ -325,13 +346,19 @@ class SummaryService:
         target_date = datetime.utcnow() - timedelta(days=days_ago)
         day_start_ts = int(target_date.replace(hour=0, minute=0, second=0).timestamp())
         day_end_ts = int(target_date.replace(hour=23, minute=59, second=59).timestamp())
+        day_start_ms = day_start_ts * 1000
+        day_end_ms = day_end_ts * 1000
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
-                SELECT COUNT(*) FROM synced_snapshots 
-                WHERE user_id = ? AND timestamp BETWEEN ? AND ?
+                SELECT COUNT(*) FROM synced_snapshots
+                WHERE user_id = ?
+                  AND (
+                    (timestamp < 1000000000000 AND timestamp BETWEEN ? AND ?)
+                    OR (timestamp >= 1000000000000 AND timestamp BETWEEN ? AND ?)
+                  )
                 """,
-                (user_id, day_start_ts, day_end_ts),
+                (user_id, day_start_ts, day_end_ts, day_start_ms, day_end_ms),
             )
             return cursor.fetchone()[0]

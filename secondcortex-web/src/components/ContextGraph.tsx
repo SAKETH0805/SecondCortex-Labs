@@ -29,11 +29,26 @@ declare global {
 
 interface SnapshotEvent {
     id: string;
-    timestamp: number;
+    timestamp: number | string;
     developer_name: string;
     active_file: string;
     git_branch: string | null;
     summary: string;
+}
+
+function toTimestampMs(value: number | string | undefined): number {
+    if (typeof value === 'number') {
+        return value > 1_000_000_000_000 ? value : value * 1000;
+    }
+    if (typeof value === 'string') {
+        const numeric = Number(value);
+        if (!Number.isNaN(numeric) && Number.isFinite(numeric)) {
+            return numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
+        }
+        const parsed = Date.parse(value);
+        return Number.isNaN(parsed) ? 0 : parsed;
+    }
+    return 0;
 }
 
 const NODE_STYLES: Record<string, React.CSSProperties> = {
@@ -120,13 +135,12 @@ export default function ContextGraph({
 
     const recentSummaries = useMemo(() => {
         return timeline
-            .slice(Math.max(0, selectedIndex - 4), selectedIndex + 1)
+            .slice(selectedIndex, selectedIndex + 5)
             .map((snapshot) => ({
                 id: snapshot.id,
                 summary: snapshot.summary || 'No summary',
-                time: new Date(snapshot.timestamp).toLocaleTimeString(),
-            }))
-            .reverse();
+                time: new Date(toTimestampMs(snapshot.timestamp)).toLocaleTimeString()
+            }));
     }, [timeline, selectedIndex]);
 
     useEffect(() => {
@@ -155,8 +169,8 @@ export default function ContextGraph({
         }
 
         setSelectedIndex(index);
-        setIsPinnedInPast(index < timeline.length - 1);
-        setLastEvent(`${new Date(snapshot.timestamp).toLocaleTimeString()} - ${snapshot.summary || snapshot.active_file}`);
+        setIsPinnedInPast(index > 0);
+        setLastEvent(`${new Date(toTimestampMs(snapshot.timestamp)).toLocaleTimeString()} - ${snapshot.summary || snapshot.active_file}`);
         postToHost({ type: 'previewSnapshot', snapshotId: snapshot.id });
     }, [timeline, postToHost]);
 
@@ -224,7 +238,7 @@ export default function ContextGraph({
         const timestampNodeId = `time-${snapshot.id}`;
         outNodes.push({
             id: timestampNodeId,
-            data: { label: `Time: ${new Date(snapshot.timestamp).toLocaleString()}` },
+            data: { label: `Time: ${new Date(toTimestampMs(snapshot.timestamp)).toLocaleString()}` },
             position: { x: 260, y: -80 },
             style: NODE_STYLES.entity,
         });
@@ -285,7 +299,10 @@ export default function ContextGraph({
                 }
 
                 const data = await response.json() as { timeline?: SnapshotEvent[] };
-                const nextTimeline = Array.isArray(data.timeline) ? data.timeline : [];
+                const rawTimeline = Array.isArray(data.timeline) ? data.timeline : [];
+                const nextTimeline = rawTimeline.slice().sort((a, b) => {
+                    return toTimestampMs(b.timestamp) - toTimestampMs(a.timestamp);
+                });
 
                 setTimeline(nextTimeline);
                 setIsConnected(true);
@@ -293,7 +310,7 @@ export default function ContextGraph({
                 if (nextTimeline.length > 0) {
                     setSelectedIndex((prevIndex) => {
                         if (!isPinnedInPast) {
-                            return nextTimeline.length - 1;
+                            return 0;
                         }
                         return Math.min(prevIndex, nextTimeline.length - 1);
                     });
@@ -321,7 +338,7 @@ export default function ContextGraph({
     const selectedAgeLabel = selectedSnapshot
         ? (() => {
             const now = Date.now();
-            const then = new Date(selectedSnapshot.timestamp).getTime();
+            const then = toTimestampMs(selectedSnapshot.timestamp);
             const mins = Math.max(0, Math.round((now - then) / 60000));
             if (mins < 1) return 'just now';
             if (mins < 60) return `${mins}m ago`;
@@ -538,7 +555,7 @@ export default function ContextGraph({
                         <button
                             key={snapshot.id}
                             onClick={() => handlePreviewSelection(idx)}
-                            title={new Date(snapshot.timestamp).toLocaleString()}
+                            title={new Date(toTimestampMs(snapshot.timestamp)).toLocaleString()}
                             style={{
                                 width: 10,
                                 height: 10,
