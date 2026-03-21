@@ -418,10 +418,21 @@ class UserDB:
             if not cursor.fetchone():
                 raise ValueError(f"User {team_lead_id} does not exist")
             
+            # Create the team
             conn.execute(
                 "INSERT INTO teams (id, name, team_lead_id) VALUES (?, ?, ?)",
                 (team_id, name, team_lead_id),
             )
+            
+            # Update team lead's team_id
+            conn.execute("UPDATE users SET team_id = ? WHERE id = ?", (team_id, team_lead_id))
+            
+            # Add team lead to team_members
+            conn.execute(
+                "INSERT INTO team_members (team_id, user_id) VALUES (?, ?)",
+                (team_id, team_lead_id),
+            )
+            
             conn.commit()
         return {"id": team_id, "name": name, "team_lead_id": team_lead_id}
 
