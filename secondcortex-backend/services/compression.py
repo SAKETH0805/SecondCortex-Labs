@@ -22,6 +22,40 @@ from services.rate_limiter import rate_limited_call
 logger = logging.getLogger("secondcortex.compression")
 
 
+def _parse_snapshot_datetime(value: Any) -> datetime | None:
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        if numeric > 1_000_000_000_000:
+            numeric = numeric / 1000.0
+        try:
+            return datetime.utcfromtimestamp(numeric)
+        except (ValueError, OverflowError, OSError):
+            return None
+
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+
+        try:
+            numeric = float(raw)
+            if numeric > 1_000_000_000_000:
+                numeric = numeric / 1000.0
+            return datetime.utcfromtimestamp(numeric)
+        except ValueError:
+            pass
+
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                parsed = parsed.replace(tzinfo=None)
+            return parsed
+        except (ValueError, TypeError):
+            return None
+
+    return None
+
+
 # COMPRESSION_CONFLICT_MARKER_START: snapshot-context-compression
 async def compress_memory(user_id: str, vector_db: Any) -> dict:
     """
@@ -41,11 +75,7 @@ async def compress_memory(user_id: str, vector_db: Any) -> dict:
     # COMPRESSION_CONFLICT_MARKER_START: group-by-date
     by_date: dict[str, list[dict]] = defaultdict(list)
     for snap in all_snapshots:
-        ts = snap.get("timestamp", "")
-        try:
-            dt = datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else None
-        except (ValueError, TypeError):
-            dt = None
+        dt = _parse_snapshot_datetime(snap.get("timestamp", ""))
         if dt:
             by_date[dt.strftime("%Y-%m-%d")].append(snap)
     # COMPRESSION_CONFLICT_MARKER_END: group-by-date
@@ -98,11 +128,7 @@ async def compress_memory(user_id: str, vector_db: Any) -> dict:
     # COMPRESSION_CONFLICT_MARKER_START: weekly-compression
     by_week: dict[str, list[dict]] = defaultdict(list)
     for snap in all_snapshots:
-        ts = snap.get("timestamp", "")
-        try:
-            dt = datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else None
-        except (ValueError, TypeError):
-            dt = None
+        dt = _parse_snapshot_datetime(snap.get("timestamp", ""))
         if dt:
             week_key = dt.strftime("%Y-W%W")
             by_week[week_key].append(snap)

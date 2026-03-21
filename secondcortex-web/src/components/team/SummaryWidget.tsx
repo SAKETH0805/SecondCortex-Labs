@@ -128,16 +128,22 @@ export default function SummaryWidget({
 
   const memberExplanation =
     members.length > 0
-      ? topMember
+      ? topMember && topMember.snapshots_count > 0
         ? `${topMember.display_name} contributed the most with ${topMember.snapshots_count} snapshot${topMember.snapshots_count === 1 ? '' : 's'}.`
-        : 'Member activity is available for this period.'
+        : 'No member activity was detected in this period.'
       : 'No member-level activity is available for this period.';
+
+  const periodExplanation =
+    period === 'daily'
+      ? 'This card summarizes your most recent 24 hours of captured work.'
+      : 'This card summarizes your last 7 days of captured work.';
 
   return (
     <div className={`space-y-3 text-sm ${contextStyles[context]}`}>
       <div className="font-semibold text-slate-200">{title}</div>
 
       <p className="text-slate-200">{mainExplanation}</p>
+      <p className="text-slate-400">{periodExplanation}</p>
 
       <p className="text-slate-300">
         {activeMembers} active member{activeMembers === 1 ? '' : 's'} in this period.

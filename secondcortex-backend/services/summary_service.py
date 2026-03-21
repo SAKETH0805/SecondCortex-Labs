@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from config import settings
 from models.schemas import TeamDailySummary, TeamWeeklySummary, MemberSummary
 from auth.database import UserDB
+from services.vector_db import VectorDBService
 
 logger = logging.getLogger("secondcortex.services.summary_service")
 
@@ -23,6 +24,7 @@ class SummaryService:
     def __init__(self):
         self.db_path = str(Path(settings.chroma_db_path).parent / "auth.db")
         self.user_db = UserDB()
+        self.vector_db = VectorDBService()
 
     def generate_daily_summary(self, team_id: str) -> dict:
         """
@@ -155,19 +157,19 @@ class SummaryService:
         if not user:
             raise ValueError(f"User {user_id} not found")
         
-        team_id = user.get("team_id")
-        
-        # Get snapshot count for today
-        snapshot_count = self._get_user_snapshot_count_for_day(user_id, days_ago=0)
+        user_activity = self._get_user_vector_activity(user_id)
+        now = datetime.utcnow()
+        daily_cutoff = now - timedelta(hours=24)
+        daily_activity = [entry for entry in user_activity if entry["timestamp"] >= daily_cutoff]
+
+        snapshot_count = len(daily_activity)
         
         # Get commits for today
         commit_count = self._get_commit_count(user_id, days=1)
         
-        # Get languages used today
-        languages = self._get_languages_used(user_id, days=1)
-        
-        # Get files modified today
-        files_modified = self._get_files_modified(user_id, days=1)
+        # Get languages/files used from timeline
+        languages = self._infer_languages_from_files([entry["active_file"] for entry in daily_activity])
+        files_modified = len({entry["active_file"] for entry in daily_activity if entry["active_file"]})
         
         is_active = snapshot_count > 0 or commit_count > 0
         
@@ -201,19 +203,20 @@ class SummaryService:
         if not user:
             raise ValueError(f"User {user_id} not found")
         
-        team_id = user.get("team_id")
-        
+        user_activity = self._get_user_vector_activity(user_id)
+        now = datetime.utcnow()
+        weekly_cutoff = now - timedelta(days=7)
+        weekly_activity = [entry for entry in user_activity if entry["timestamp"] >= weekly_cutoff]
+
         # Get snapshot count for this week
-        snapshot_count = self._get_user_snapshot_count(user_id, days=7)
+        snapshot_count = len(weekly_activity)
         
         # Get commits for this week
         commit_count = self._get_commit_count(user_id, days=7)
         
-        # Get languages used this week
-        languages = self._get_languages_used(user_id, days=7)
-        
-        # Get files modified this week
-        files_modified = self._get_files_modified(user_id, days=7)
+        # Get languages/files used from timeline
+        languages = self._infer_languages_from_files([entry["active_file"] for entry in weekly_activity])
+        files_modified = len({entry["active_file"] for entry in weekly_activity if entry["active_file"]})
         
         is_active = snapshot_count > 0 or commit_count > 0
         
@@ -231,8 +234,9 @@ class SummaryService:
         # Build daily breakdown for the week
         daily_breakdown = {}
         for i in range(7):
-            day = (datetime.utcnow() - timedelta(days=i)).strftime("%A")
-            count = self._get_user_snapshot_count_for_day(user_id, i)
+            day_dt = (now - timedelta(days=i)).date()
+            day = (now - timedelta(days=i)).strftime("%A")
+            count = sum(1 for entry in weekly_activity if entry["timestamp"].date() == day_dt)
             daily_breakdown[day] = count
         
         return {
@@ -245,6 +249,102 @@ class SummaryService:
             "daily_breakdown": daily_breakdown,
             "generated_at": datetime.utcnow().isoformat(),
         }
+
+    def _parse_snapshot_timestamp(self, value: object) -> datetime | None:
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+            if numeric > 1_000_000_000_000:
+                numeric = numeric / 1000.0
+            try:
+                return datetime.utcfromtimestamp(numeric)
+            except (OverflowError, OSError, ValueError):
+                return None
+
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+
+            try:
+                numeric = float(raw)
+                if numeric > 1_000_000_000_000:
+                    numeric = numeric / 1000.0
+                return datetime.utcfromtimestamp(numeric)
+            except ValueError:
+                pass
+
+            try:
+                parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                if parsed.tzinfo is not None:
+                    parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+                return parsed
+            except ValueError:
+                return None
+
+        return None
+
+    def _get_user_vector_activity(self, user_id: str) -> list[dict]:
+        collection = self.vector_db._get_collection(user_id)
+        if collection is None:
+            return []
+
+        try:
+            total = collection.count() or 0
+            if total <= 0:
+                return []
+
+            fetch_limit = min(total, 2500)
+            result = collection.get(limit=fetch_limit, include=["metadatas"])
+            metadatas = (result or {}).get("metadatas") or []
+
+            activity: list[dict] = []
+            for meta in metadatas:
+                if not meta:
+                    continue
+                timestamp = self._parse_snapshot_timestamp(meta.get("timestamp"))
+                if not timestamp:
+                    continue
+                activity.append(
+                    {
+                        "timestamp": timestamp,
+                        "active_file": str(meta.get("active_file") or ""),
+                    }
+                )
+
+            activity.sort(key=lambda row: row["timestamp"], reverse=True)
+            return activity
+        except Exception as exc:
+            logger.error("Failed to compute vector activity for user=%s: %s", user_id, exc)
+            return []
+
+    def _infer_languages_from_files(self, file_paths: list[str]) -> list[str]:
+        extension_map = {
+            "py": "Python",
+            "ts": "TypeScript",
+            "tsx": "TypeScript",
+            "js": "JavaScript",
+            "jsx": "JavaScript",
+            "json": "JSON",
+            "md": "Markdown",
+            "css": "CSS",
+            "html": "HTML",
+            "yml": "YAML",
+            "yaml": "YAML",
+            "sql": "SQL",
+            "sh": "Shell",
+            "ps1": "PowerShell",
+        }
+
+        languages: set[str] = set()
+        for file_path in file_paths:
+            if not file_path or "." not in file_path:
+                continue
+            ext = file_path.rsplit(".", 1)[-1].lower()
+            language = extension_map.get(ext)
+            if language:
+                languages.add(language)
+
+        return sorted(languages)
 
 
     def _get_snapshot_count(self, user_id: str, team_id: str, days: int = 1) -> int:
