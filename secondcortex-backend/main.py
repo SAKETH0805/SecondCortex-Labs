@@ -42,7 +42,7 @@ from agents.executor import ExecutorAgent
 from agents.planner import PlannerAgent
 from agents.retriever import RetrieverAgent
 from agents.simulator import SimulatorAgent
-from auth.jwt_handler import get_current_user
+from auth.jwt_handler import get_current_principal, get_current_user
 from auth.routes import router as auth_router
 from teams.routes import router as teams_router
 from teams.summary_routes import router as summary_router
@@ -306,6 +306,13 @@ def _workspaces_match(current_workspace: str | None, target_workspace: str | Non
     left = os.path.normcase(os.path.abspath(current_workspace))
     right = os.path.normcase(os.path.abspath(target_workspace))
     return left == right
+
+
+def _principal_scopes(principal: dict) -> set[str]:
+    scopes = principal.get("scopes") or []
+    if isinstance(scopes, str):
+        scopes = [scopes]
+    return {str(scope) for scope in scopes}
 
 
 async def _resolve_resurrection_snapshot(target: str, user_id: str) -> dict | None:
@@ -642,6 +649,51 @@ async def handle_query(
         logger.error("QUERY PIPELINE CRASH: %s\n%s", exc, err)
         raise HTTPException(status_code=500, detail=f"Query pipeline error: {str(exc)}")
 
+
+@app.post("/api/v1/pm/query", response_model=QueryResponse)
+async def handle_pm_query(
+    req: QueryRequest,
+    principal: dict = Depends(get_current_principal),
+):
+    """
+    PM-safe query endpoint.
+    Supports authenticated PM users and restricted PM guest sessions.
+    """
+    role = str(principal.get("role") or "user")
+    user_id = str(principal.get("sub") or "")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload.")
+
+    if role == "pm_guest" and "pm:chat" not in _principal_scopes(principal):
+        raise HTTPException(status_code=403, detail="PM guest token lacks chat scope.")
+
+    try:
+        logger.info("PM query received: %s (user=%s)", req.question, user_id)
+
+        plan_result = await planner.plan(req.question, user_id=user_id)
+        response = await executor.synthesize(req.question, plan_result)
+
+        # Restricted guest tokens should not persist into standard user chat history.
+        if role != "pm_guest":
+            user_db.save_chat_message(user_id, "user", req.question)
+            user_db.save_chat_message(user_id, "assistant", response.summary)
+
+        logger.info("PM query answered: %s", response.summary[:100])
+        return response
+    except Exception as exc:
+        import traceback
+        err = traceback.format_exc()
+        exc_str = str(exc)
+
+        if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str:
+            logger.warning("PM QUERY RATE LIMITED: %s", exc_str[:200])
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit reached for the configured LLM provider. Please wait a minute and try again."
+            )
+
+        logger.error("PM QUERY PIPELINE CRASH: %s\n%s", exc, err)
+        raise HTTPException(status_code=500, detail=f"PM query pipeline error: {str(exc)}")
 
 
 @app.post("/api/v1/resurrect", response_model=ResurrectionResponse)

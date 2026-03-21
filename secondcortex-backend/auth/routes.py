@@ -10,7 +10,8 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, EmailStr
 
 from auth.database import UserDB
-from auth.jwt_handler import create_token, get_current_user
+from auth.jwt_handler import create_token, create_pm_guest_token, get_current_principal, get_current_user
+from config import settings
 
 logger = logging.getLogger("secondcortex.auth.routes")
 
@@ -49,6 +50,13 @@ class MeResponse(BaseModel):
     email: str
     display_name: str
     team_id: str | None = None
+
+
+class PMGuestLoginResponse(BaseModel):
+    token: str
+    role: str
+    team_id: str
+    display_name: str
 
 
 @router.post("/signup", response_model=AuthResponse)
@@ -106,9 +114,45 @@ async def get_mcp_key(user_id: str = Depends(get_current_user)):
     return MCPKeyResponse(api_key=api_key)
 
 
+@router.post("/pm-guest/login", response_model=PMGuestLoginResponse)
+async def pm_guest_login():
+    """Issue a restricted PM guest token (read/chat scope only)."""
+    if not settings.pm_guest_enabled:
+        raise HTTPException(status_code=403, detail="PM guest login is disabled.")
+
+    team_id = (settings.pm_guest_team_id or "").strip()
+    if not team_id:
+        raise HTTPException(status_code=503, detail="PM_GUEST_TEAM_ID is not configured.")
+
+    team_info = user_db.get_team_info(team_id)
+    if not team_info:
+        raise HTTPException(status_code=503, detail="Configured PM guest team does not exist.")
+
+    display_name = (settings.pm_guest_display_name or "PM Guest").strip()
+    token = create_pm_guest_token(team_id=team_id, display_name=display_name)
+
+    return PMGuestLoginResponse(
+        token=token,
+        role="pm_guest",
+        team_id=team_id,
+        display_name=display_name,
+    )
+
+
 @router.get("/me", response_model=MeResponse)
-async def get_me(user_id: str = Depends(get_current_user)):
-    """Return current authenticated user profile metadata."""
+async def get_me(principal: dict = Depends(get_current_principal)):
+    """Return current authenticated principal metadata."""
+    role = str(principal.get("role") or "user")
+    if role == "pm_guest":
+        team_id = str(principal.get("team_id") or "").strip() or None
+        return MeResponse(
+            user_id=str(principal.get("sub") or "pm_guest"),
+            email=str(principal.get("email") or settings.pm_guest_email),
+            display_name=str(principal.get("display_name") or settings.pm_guest_display_name),
+            team_id=team_id,
+        )
+
+    user_id = str(principal.get("sub") or "")
     user = user_db.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")

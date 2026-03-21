@@ -296,7 +296,7 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
         `PM question: ${trimmed}`,
       ].join('\n\n');
 
-      const res = await fetch(`${apiBase}/api/v1/query`, {
+      const res = await fetch(`${apiBase}/api/v1/pm/query`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -449,7 +449,7 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
 
             <section className="pm-panel">
               <h2 className="pm-panel-title">PM Chatbot</h2>
-              <p className="pm-chat-sub">Powered by existing integrated LLM endpoint (`/api/v1/query`).</p>
+              <p className="pm-chat-sub">Powered by the integrated LLM endpoint (`/api/v1/pm/query`).</p>
 
               <div className="pm-chat-quick">
                 <button type="button" onClick={() => sendQuestion('What is this member currently progressing on?')}>

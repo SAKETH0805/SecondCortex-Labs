@@ -44,17 +44,25 @@ export default function LandingPage() {
   };
 
   const handlePmGuestLogin = async () => {
-    const guestEmail = (process.env.NEXT_PUBLIC_PM_GUEST_EMAIL || pmEmail).trim();
-    const guestPassword = process.env.NEXT_PUBLIC_PM_GUEST_PASSWORD || pmPassword;
-    if (!guestEmail || !guestPassword) {
-      setPmError("Enter PM credentials first, or configure guest credentials in environment variables.");
-      return;
-    }
-
     setIsPmSubmitting(true);
     setPmError("");
     try {
-      await loginPmSession(guestEmail, guestPassword, true);
+      const res = await fetch(`${backendUrl}/api/v1/auth/pm-guest/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Guest PM login is unavailable right now.");
+      }
+
+      const data = await res.json();
+      localStorage.setItem("sc_jwt_token", data.token);
+      localStorage.setItem("sc_pm_mode", "auth");
+      localStorage.setItem("sc_pm_guest_mode", "true");
+      router.push("/live?pm=true&guest=true");
+      setShowPmModal(false);
     } catch (err) {
       setPmError(err instanceof Error ? err.message : "Guest PM login failed.");
     } finally {
