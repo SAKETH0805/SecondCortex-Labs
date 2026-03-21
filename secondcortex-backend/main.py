@@ -45,6 +45,7 @@ from agents.simulator import SimulatorAgent
 from auth.jwt_handler import get_current_user
 from auth.routes import router as auth_router
 from teams.routes import router as teams_router
+from teams.summary_routes import router as summary_router
 from config import settings
 from models import schemas
 from models.schemas import (
@@ -128,6 +129,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ── Include auth routes ─────────────────────────────────────────
 app.include_router(auth_router)
 app.include_router(teams_router)
+app.include_router(summary_router)
 
 # ── MCP Server Mount ──────────────────────────
 from mcp_server import mcp
