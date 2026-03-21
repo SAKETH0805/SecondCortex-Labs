@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 
 type TerminalLine = {
   type: "cmd" | "out" | "highlight" | "warn" | "success";
@@ -9,6 +10,78 @@ type TerminalLine = {
 };
 
 export default function LandingPage() {
+  const router = useRouter();
+  const [showPmModal, setShowPmModal] = useState(false);
+  const [pmEmail, setPmEmail] = useState("");
+  const [pmPassword, setPmPassword] = useState("");
+  const [pmError, setPmError] = useState("");
+  const [isPmSubmitting, setIsPmSubmitting] = useState(false);
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "https://sc-backend-suhaan.azurewebsites.net";
+
+  const loginPmSession = async (email: string, password: string, guestMode: boolean) => {
+    const res = await fetch(`${backendUrl}/api/v1/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "PM login failed. Please check credentials.");
+    }
+
+    const data = await res.json();
+    localStorage.setItem("sc_jwt_token", data.token);
+    localStorage.setItem("sc_pm_mode", "auth");
+    if (guestMode) {
+      localStorage.setItem("sc_pm_guest_mode", "true");
+      router.push("/live?pm=true&guest=true");
+    } else {
+      localStorage.removeItem("sc_pm_guest_mode");
+      router.push("/live?pm=true");
+    }
+    setShowPmModal(false);
+  };
+
+  const handlePmGuestLogin = async () => {
+    const guestEmail = (process.env.NEXT_PUBLIC_PM_GUEST_EMAIL || pmEmail).trim();
+    const guestPassword = process.env.NEXT_PUBLIC_PM_GUEST_PASSWORD || pmPassword;
+    if (!guestEmail || !guestPassword) {
+      setPmError("Enter PM credentials first, or configure guest credentials in environment variables.");
+      return;
+    }
+
+    setIsPmSubmitting(true);
+    setPmError("");
+    try {
+      await loginPmSession(guestEmail, guestPassword, true);
+    } catch (err) {
+      setPmError(err instanceof Error ? err.message : "Guest PM login failed.");
+    } finally {
+      setIsPmSubmitting(false);
+    }
+  };
+
+  const handlePmLogin = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const email = pmEmail.trim();
+    if (!email || !pmPassword) {
+      setPmError("Please enter both email and password.");
+      return;
+    }
+
+    setIsPmSubmitting(true);
+    setPmError("");
+
+    try {
+      await loginPmSession(email, pmPassword, false);
+    } catch (err) {
+      setPmError(err instanceof Error ? err.message : "Cannot reach backend. Check your network and try again.");
+    } finally {
+      setIsPmSubmitting(false);
+    }
+  };
+
   useEffect(() => {
     const canvas = document.getElementById("neural-canvas") as HTMLCanvasElement | null;
     const tb = document.getElementById("terminal-body");
@@ -340,6 +413,16 @@ export default function LandingPage() {
           </li>
         </ul>
         <div className="nav-actions">
+          <button
+            className="nav-login nav-pm-login"
+            type="button"
+            onClick={() => {
+              setPmError("");
+              setShowPmModal(true);
+            }}
+          >
+            PM
+          </button>
           <a className="nav-login" href="/login">
             Login
           </a>
@@ -851,6 +934,62 @@ export default function LandingPage() {
         </div>
         <div>Copyright 2026 SecondCortex Labs</div>
       </footer>
+
+      {showPmModal && (
+        <div className="sc-modal-wrap">
+          <div className="sc-modal-backdrop" onClick={() => setShowPmModal(false)} />
+          <div className="sc-modal-card pm-login-card">
+            <div className="sc-auth-header">
+              <p className="sc-auth-eyebrow">Project Manager Access</p>
+              <h2 className="sc-auth-title">PM Login</h2>
+              <p className="sc-auth-sub">Log in as PM or continue with guest access to review team progress.</p>
+            </div>
+
+            <form onSubmit={handlePmLogin} className="sc-auth-form">
+              <label className="sc-auth-label" htmlFor="pm-email">
+                Email
+              </label>
+              <input
+                id="pm-email"
+                className="sc-auth-input"
+                type="email"
+                value={pmEmail}
+                onChange={(event) => setPmEmail(event.target.value)}
+                placeholder="pm@secondcortex.ai"
+                required
+              />
+
+              <label className="sc-auth-label" htmlFor="pm-password">
+                Password
+              </label>
+              <input
+                id="pm-password"
+                className="sc-auth-input"
+                type="password"
+                value={pmPassword}
+                onChange={(event) => setPmPassword(event.target.value)}
+                placeholder="********"
+                required
+              />
+
+              {pmError && <div className="sc-auth-error">{pmError}</div>}
+
+              <button type="submit" disabled={isPmSubmitting} className="btn-primary sc-auth-submit">
+                {isPmSubmitting ? "Please wait..." : "Login as PM"}
+              </button>
+
+              <button
+                type="button"
+                className="btn-secondary sc-auth-submit sc-guest-btn"
+                disabled={isPmSubmitting}
+                onClick={handlePmGuestLogin}
+              >
+                {isPmSubmitting ? "Please wait..." : "Guest Login"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 }

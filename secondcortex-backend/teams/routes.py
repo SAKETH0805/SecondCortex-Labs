@@ -4,6 +4,7 @@ Team API routes: create, join, get members, generate invite codes.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 
@@ -50,6 +51,20 @@ class TeamInfo(BaseModel):
     name: str
     team_lead_id: str
     member_count: int
+
+
+class MemberSnapshot(BaseModel):
+    id: str
+    user_id: str
+    team_id: str | None = None
+    workspace: str
+    active_file: str
+    git_branch: str | None = None
+    terminal_commands: list[str]
+    summary: str
+    enriched_context: dict
+    timestamp: int
+    synced: int
 
 
 @router.post("", response_model=CreateTeamResponse)
@@ -153,3 +168,72 @@ async def generate_new_invite_code(team_id: str, user_id: str = Depends(get_curr
     logger.info(f"New invite code generated for team {team_id} by {user_id}")
     
     return {"invite_code": code}
+
+
+@router.get("/{team_id}/members/{member_id}/snapshots", response_model=list[MemberSnapshot])
+async def get_member_snapshots(
+    team_id: str,
+    member_id: str,
+    limit: int = 1000,
+    user_id: str = Depends(get_current_user),
+):
+    """
+    Return full IDE snapshot history for one team member.
+    User must belong to the same team.
+    """
+    requester = user_db.get_user_by_id(user_id)
+    member = user_db.get_user_by_id(member_id)
+
+    if not requester or not member:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    requester_team = requester.get("team_id")
+    member_team = member.get("team_id")
+    if requester_team != team_id or member_team != team_id:
+        raise HTTPException(status_code=403, detail="Not authorized to view this member history")
+
+    rows = user_db.get_user_snapshots(member_id, limit=limit)
+    snapshots: list[MemberSnapshot] = []
+
+    for row in rows:
+        commands_raw = row.get("terminal_commands") or "[]"
+        commands: list[str] = []
+        if isinstance(commands_raw, list):
+            commands = [str(cmd) for cmd in commands_raw]
+        elif isinstance(commands_raw, str):
+            try:
+                parsed = json.loads(commands_raw)
+                if isinstance(parsed, list):
+                    commands = [str(cmd) for cmd in parsed]
+            except Exception:
+                commands = []
+
+        enriched_raw = row.get("enriched_context") or "{}"
+        enriched_context: dict = {}
+        if isinstance(enriched_raw, dict):
+            enriched_context = enriched_raw
+        elif isinstance(enriched_raw, str):
+            try:
+                parsed_context = json.loads(enriched_raw)
+                if isinstance(parsed_context, dict):
+                    enriched_context = parsed_context
+            except Exception:
+                enriched_context = {}
+
+        snapshots.append(
+            MemberSnapshot(
+                id=str(row.get("id")),
+                user_id=str(row.get("user_id")),
+                team_id=row.get("team_id"),
+                workspace=str(row.get("workspace") or ""),
+                active_file=str(row.get("active_file") or ""),
+                git_branch=row.get("git_branch"),
+                terminal_commands=commands,
+                summary=str(row.get("summary") or ""),
+                enriched_context=enriched_context,
+                timestamp=int(row.get("timestamp") or 0),
+                synced=int(row.get("synced") or 0),
+            )
+        )
+
+    return snapshots

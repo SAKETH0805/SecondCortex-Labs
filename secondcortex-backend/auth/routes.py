@@ -44,6 +44,13 @@ class MCPKeyResponse(BaseModel):
     api_key: str | None
 
 
+class MeResponse(BaseModel):
+    user_id: str
+    email: str
+    display_name: str
+    team_id: str | None = None
+
+
 @router.post("/signup", response_model=AuthResponse)
 async def signup(req: SignupRequest):
     """Create a new account."""
@@ -97,3 +104,17 @@ async def get_mcp_key(user_id: str = Depends(get_current_user)):
     """Get the current user's existing MCP API key."""
     api_key = user_db.get_mcp_api_key(user_id)
     return MCPKeyResponse(api_key=api_key)
+
+
+@router.get("/me", response_model=MeResponse)
+async def get_me(user_id: str = Depends(get_current_user)):
+    """Return current authenticated user profile metadata."""
+    user = user_db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return MeResponse(
+        user_id=user["id"],
+        email=user["email"],
+        display_name=user["display_name"],
+        team_id=user.get("team_id"),
+    )
