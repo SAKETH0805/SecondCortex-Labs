@@ -58,6 +58,13 @@ interface ChatMessage {
 
 type SummaryKind = 'daily' | 'weekly' | 'feature';
 
+const PM_GUEST_MEMBER: TeamMember = {
+  id: 'saketh',
+  email: 'saketh@secondcortex.local',
+  display_name: 'Saketh',
+  created_at: '1970-01-01T00:00:00.000Z',
+};
+
 function toDisplayName(member: TeamMember): string {
   return (member.display_name || member.email.split('@')[0] || member.id).trim();
 }
@@ -88,6 +95,13 @@ function topFiles(snapshots: MemberSnapshot[], limit: number): string[] {
     .map(([file, count]) => `${file} (${count})`);
 }
 
+function isSakethMember(member: TeamMember): boolean {
+  const id = member.id.trim().toLowerCase();
+  const email = member.email.trim().toLowerCase();
+  const displayName = toDisplayName(member).trim().toLowerCase();
+  return id === 'saketh' || email.startsWith('saketh@') || displayName === 'saketh';
+}
+
 export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGuestDashboardProps) {
   const apiBase = backendUrl || process.env.NEXT_PUBLIC_BACKEND_URL || 'https://sc-backend-suhaan.azurewebsites.net';
 
@@ -111,6 +125,11 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
       text: 'Welcome PM. Chat is connected to the integrated backend LLM. Use member summary buttons for daily, weekly, or feature compression views.',
     },
   ]);
+
+  const visibleMembers = useMemo(() => {
+    const hasSaketh = members.some(isSakethMember);
+    return hasSaketh ? members : [...members, PM_GUEST_MEMBER];
+  }, [members]);
 
   useEffect(() => {
     let cancelled = false;
@@ -146,9 +165,12 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
         if (cancelled) {
           return;
         }
-        setMembers(orderedMembers);
-        if (orderedMembers.length > 0) {
-          const initial = orderedMembers[0].id;
+        const displayMembers = orderedMembers.some(isSakethMember)
+          ? orderedMembers
+          : [...orderedMembers, PM_GUEST_MEMBER];
+        setMembers(displayMembers);
+        if (displayMembers.length > 0) {
+          const initial = displayMembers[0].id;
           setSelectedMemberId((prev) => prev || initial);
           setSummarySelection((prev) => prev || { memberId: initial, kind: 'daily' });
         }
@@ -207,15 +229,15 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
   }, [apiBase, token]);
 
   const selectedMember = useMemo(
-    () => members.find((member) => member.id === selectedMemberId),
-    [members, selectedMemberId],
+    () => visibleMembers.find((member) => member.id === selectedMemberId),
+    [visibleMembers, selectedMemberId],
   );
 
   const selectedSnapshots = selectedMember ? snapshotsByMember[selectedMember.id] || [] : [];
   const totalSnapshots = Object.values(snapshotsByMember).reduce((sum, snapshots) => sum + snapshots.length, 0);
 
   const getCompressedSummaryText = (memberId: string, kind: SummaryKind): string => {
-    const member = members.find((m) => m.id === memberId);
+    const member = visibleMembers.find((m) => m.id === memberId);
     if (!member) {
       return 'Member not found.';
     }
@@ -265,7 +287,7 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
       return 'Select a summary button beside a team member to view compressed output.';
     }
     return getCompressedSummaryText(summarySelection.memberId, summarySelection.kind);
-  }, [summarySelection, members, snapshotsByMember, dailySummary, weeklySummary]);
+  }, [summarySelection, visibleMembers, snapshotsByMember, dailySummary, weeklySummary]);
 
   const sendQuestion = async (input: string) => {
     const trimmed = input.trim();
@@ -333,9 +355,9 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
   return (
     <div className="sc-dashboard-wrap">
       <div className="sc-dashboard-inner">
-        <div className="sc-section-header">
+        <div className="sc-section-header pm-header">
           <p className="section-label">PM Control Surface</p>
-          <h1 className="section-title">Project Manager Dashboard</h1>
+          <h1 className="section-title pm-title">Project Manager Dashboard</h1>
           <p className="section-desc">
             Chat uses the integrated backend LLM. Compressed summaries are shown in member mini-boxes: Daily, Weekly,
             Feature.
@@ -344,7 +366,7 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
         </div>
 
         <div className="sc-stats-grid">
-          <StatCard title="Team Members" value={String(members.length)} subtitle="Visible in PM scope" />
+          <StatCard title="Team Members" value={String(visibleMembers.length)} subtitle="Visible in PM scope" />
           <StatCard title="Snapshots Indexed" value={String(totalSnapshots)} subtitle="Full IDE history available" />
           <StatCard
             title="Compression Feed"
@@ -372,16 +394,17 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
         {!loading && !error && (
           <div className="pm-grid">
             <section className="pm-panel">
+              <p className="pm-panel-kicker">Team Directory</p>
               <h2 className="pm-panel-title">Team Members</h2>
               <div className="pm-member-list">
-                {members.map((member) => (
+                {visibleMembers.map((member) => (
                   <div key={member.id} className={`pm-member-btn ${member.id === selectedMemberId ? 'active' : ''}`}>
                     <button className="pm-member-main" type="button" onClick={() => setSelectedMemberId(member.id)}>
                       <span className="pm-member-name">{toDisplayName(member)}</span>
                       <span className="pm-member-role">{member.email}</span>
                     </button>
 
-                    <div className="pm-member-corner">
+                    <div className="pm-member-actions">
                       <button
                         type="button"
                         className="pm-mini-btn"
@@ -390,7 +413,8 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
                           setSummarySelection({ memberId: member.id, kind: 'daily' });
                         }}
                       >
-                        D
+                        <span className="pm-mini-btn-key">D</span>
+                        <span className="pm-mini-btn-label">Daily</span>
                       </button>
                       <button
                         type="button"
@@ -400,7 +424,8 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
                           setSummarySelection({ memberId: member.id, kind: 'weekly' });
                         }}
                       >
-                        W
+                        <span className="pm-mini-btn-key">W</span>
+                        <span className="pm-mini-btn-label">Weekly</span>
                       </button>
                       <button
                         type="button"
@@ -410,7 +435,8 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
                           setSummarySelection({ memberId: member.id, kind: 'feature' });
                         }}
                       >
-                        F
+                        <span className="pm-mini-btn-key">F</span>
+                        <span className="pm-mini-btn-label">Feature</span>
                       </button>
                     </div>
                   </div>
@@ -429,6 +455,7 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
             </section>
 
             <section className="pm-panel">
+              <p className="pm-panel-kicker">Timeline</p>
               <h2 className="pm-panel-title">
                 {selectedMember ? `${toDisplayName(selectedMember)} Snapshot History` : 'Snapshot History'}
               </h2>
@@ -448,6 +475,7 @@ export default function PMGuestDashboard({ token, isGuestPm, backendUrl }: PMGue
             </section>
 
             <section className="pm-panel">
+              <p className="pm-panel-kicker">Assistant</p>
               <h2 className="pm-panel-title">PM Chatbot</h2>
               <p className="pm-chat-sub">Powered by the integrated LLM endpoint (`/api/v1/pm/query`).</p>
 
