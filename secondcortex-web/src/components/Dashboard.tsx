@@ -36,7 +36,11 @@ function getUserIdFromToken(token: string): string | null {
 
 export default function Dashboard({ 
     token, 
-    backendUrl = 'https://sc-backend-suhaan.azurewebsites.net',
+    backendUrl =
+        process.env.NEXT_PUBLIC_BACKEND_URL ||
+        (typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname)
+            ? 'http://127.0.0.1:8000'
+            : 'https://sc-backend-suhaan.azurewebsites.net'),
     mode = 'developer',
     isGuestPm = false,
     isGuestDeveloper = false,
