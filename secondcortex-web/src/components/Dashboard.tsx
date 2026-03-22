@@ -9,6 +9,7 @@ interface DashboardProps {
     backendUrl?: string;
     mode?: 'developer' | 'pm';
     isGuestPm?: boolean;
+    isGuestDeveloper?: boolean;
 }
 
 interface Stats {
@@ -38,6 +39,7 @@ export default function Dashboard({
     backendUrl = 'https://sc-backend-suhaan.azurewebsites.net',
     mode = 'developer',
     isGuestPm = false,
+    isGuestDeveloper = false,
 }: DashboardProps) {
     if (mode === 'pm') {
         return <PMGuestDashboard token={token} isGuestPm={isGuestPm} backendUrl={backendUrl} />;
@@ -90,6 +92,7 @@ export default function Dashboard({
                     <p className="section-label">Control Surface</p>
                     <h1 className="section-title">Developer Dashboard</h1>
                     <p className="section-desc">View your SecondCortex memory system stats and activity summaries.</p>
+                    {isGuestDeveloper && <p className="pm-mode-chip">Guest Session: Suhaan</p>}
                 </div>
 
                 <div className="sc-stats-grid">
