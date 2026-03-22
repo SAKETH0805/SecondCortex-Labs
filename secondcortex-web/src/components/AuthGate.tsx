@@ -22,6 +22,7 @@ export default function AuthGate() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'live'>('dashboard');
   const [sessionMode, setSessionMode] = useState<SessionMode>('developer');
   const [isPmGuest, setIsPmGuest] = useState(false);
+  const [isDevGuest, setIsDevGuest] = useState(false);
 
   const [mcpKey, setMcpKey] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -37,6 +38,7 @@ export default function AuthGate() {
     const guestQuery = params.get('guest') === 'true';
     const storedPmGuest = localStorage.getItem('sc_pm_guest_mode') === 'true';
     const storedPmAuth = localStorage.getItem('sc_pm_mode') === 'auth' || storedPmGuest;
+    const storedDevGuest = localStorage.getItem('sc_dev_guest_mode') === 'true';
 
     const storedToken = localStorage.getItem('sc_jwt_token');
     if (!storedToken) {
@@ -49,6 +51,7 @@ export default function AuthGate() {
     const nextGuest = nextMode === 'pm' && (guestQuery || storedPmGuest);
     setSessionMode(nextMode);
     setIsPmGuest(nextGuest);
+    setIsDevGuest(nextMode === 'developer' && storedDevGuest);
     setToken(storedToken);
     if (nextGuest) {
       setActiveTab('dashboard');
@@ -114,10 +117,12 @@ export default function AuthGate() {
     localStorage.removeItem('sc_jwt_token');
     localStorage.removeItem('sc_pm_mode');
     localStorage.removeItem('sc_pm_guest_mode');
+    localStorage.removeItem('sc_dev_guest_mode');
 
     setToken(null);
     setSessionMode('developer');
     setIsPmGuest(false);
+    setIsDevGuest(false);
     setActiveTab('dashboard');
 
     router.push('/');
@@ -137,6 +142,7 @@ export default function AuthGate() {
         <div className="nav-logo">
           Second<span>Cortex</span>
           {sessionMode === 'pm' && <span className="sc-role-badge">PM</span>}
+          {sessionMode === 'developer' && isDevGuest && <span className="sc-role-badge">Guest</span>}
         </div>
 
         <div className="sc-app-tabs">
@@ -176,7 +182,7 @@ export default function AuthGate() {
 
       <div className="sc-app-content custom-scrollbar">
         {activeTab === 'dashboard' ? (
-          <Dashboard token={token} mode={sessionMode} isGuestPm={isPmGuest} />
+          <Dashboard token={token} mode={sessionMode} isGuestPm={isPmGuest} isGuestDeveloper={isDevGuest} />
         ) : sessionMode === 'pm' && isPmGuest ? (
           <div className="sc-dashboard-wrap">
             <div className="sc-dashboard-inner">
