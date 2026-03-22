@@ -18,7 +18,7 @@ import os
 import re
 import json
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 # ── Force Python to see the local directories (fixes Azure ModuleNotFoundError) ──────────
@@ -186,6 +186,12 @@ def _normalize_code_path(value: str | None) -> str:
     return normalized.lower()
 
 
+def _to_utc_aware_timestamp(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _parse_iso_timestamp(value: str) -> datetime | None:
     raw = (value or "").strip()
     if not raw:
@@ -196,10 +202,7 @@ def _parse_iso_timestamp(value: str) -> datetime | None:
     except ValueError:
         return None
 
-    if parsed.tzinfo is not None:
-        parsed = parsed.replace(tzinfo=None)
-
-    return parsed
+    return _to_utc_aware_timestamp(parsed)
 
 
 def _paths_match(snapshot_path: str | None, requested_path: str | None) -> bool:
@@ -835,8 +838,9 @@ async def decision_archaeology(
         f"Timestamp: {request.timestamp.isoformat()}"
     )
 
-    time_window_start = request.timestamp - timedelta(hours=2)
-    time_window_end = request.timestamp + timedelta(hours=1)
+    anchor_timestamp = _to_utc_aware_timestamp(request.timestamp)
+    time_window_start = anchor_timestamp - timedelta(hours=2)
+    time_window_end = anchor_timestamp + timedelta(hours=1)
 
     # Bound expensive retrieval to keep hover interactions responsive.
     timeline_task = asyncio.create_task(vector_db.get_snapshot_timeline(limit=800, user_id=user_id))
