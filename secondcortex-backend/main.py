@@ -176,6 +176,68 @@ def _parse_snapshot_terminal_commands(value: Any) -> list[str]:
     return []
 
 
+def _normalize_code_path(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+
+    normalized = raw.replace("\\", "/")
+    normalized = re.sub(r"/+", "/", normalized)
+    return normalized.lower()
+
+
+def _paths_match(snapshot_path: str | None, requested_path: str | None) -> bool:
+    left = _normalize_code_path(snapshot_path)
+    right = _normalize_code_path(requested_path)
+
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    if left.endswith(f"/{right}") or right.endswith(f"/{left}"):
+        return True
+
+    return os.path.basename(left) == os.path.basename(right)
+
+
+def _snapshot_mentions_symbol(snapshot: dict, symbol_name: str) -> bool:
+    needle = (symbol_name or "").strip().lower()
+    if not needle:
+        return False
+
+    summary = str(snapshot.get("summary") or "").lower()
+    if needle in summary:
+        return True
+
+    active_symbol = str(snapshot.get("active_symbol") or "").lower()
+    if needle in active_symbol:
+        return True
+
+    signatures_raw = snapshot.get("function_signatures")
+    if isinstance(signatures_raw, str) and signatures_raw.strip():
+        try:
+            parsed_signatures = json.loads(signatures_raw)
+            if isinstance(parsed_signatures, list) and any(needle in str(sig).lower() for sig in parsed_signatures):
+                return True
+        except Exception:
+            if needle in signatures_raw.lower():
+                return True
+    elif isinstance(signatures_raw, list) and any(needle in str(sig).lower() for sig in signatures_raw):
+        return True
+
+    shadow_graph = str(snapshot.get("shadow_graph") or snapshot.get("document") or "").lower()
+    if needle in shadow_graph:
+        return True
+
+    entities_raw = snapshot.get("entities")
+    if isinstance(entities_raw, list):
+        return any(needle in str(entity).lower() for entity in entities_raw)
+    if isinstance(entities_raw, str):
+        return needle in entities_raw.lower()
+
+    return False
+
+
 def _deduplicate_snapshots(snapshots: list[dict]) -> list[dict]:
     seen_ids: set[str] = set()
     deduped: list[dict] = []
@@ -563,6 +625,8 @@ async def get_snapshot_by_id(
             "git_branch": snapshot.get("git_branch"),
             "summary": snapshot.get("summary"),
             "entities": snapshot.get("entities", "").split(",") if snapshot.get("entities") else [],
+            "active_symbol": snapshot.get("active_symbol"),
+            "function_signatures": _parse_snapshot_entities(snapshot.get("function_signatures")),
             "shadow_graph": snapshot.get("document") or snapshot.get("shadow_graph") or "",
         }
     }
@@ -788,7 +852,7 @@ async def decision_archaeology(
 
     time_filtered: list[dict] = []
     for snapshot in timeline:
-        if str(snapshot.get("active_file") or "") != request.file_path:
+        if not _paths_match(snapshot.get("active_file"), request.file_path):
             continue
 
         snapshot_ts = _parse_iso_timestamp(str(snapshot.get("timestamp") or ""))
@@ -800,16 +864,24 @@ async def decision_archaeology(
 
     semantic_file_filtered = [
         s for s in semantic_results
-        if str(s.get("active_file") or "") == request.file_path
+        if _paths_match(s.get("active_file"), request.file_path)
     ]
     symbol_file_filtered = [
         s for s in symbol_results
-        if str(s.get("active_file") or "") == request.file_path
+        if _paths_match(s.get("active_file"), request.file_path)
     ]
 
     all_results = _deduplicate_snapshots(
         time_filtered + semantic_file_filtered + symbol_file_filtered
     )
+
+    if not all_results:
+        symbol_candidates = [
+            s
+            for s in _deduplicate_snapshots(timeline + semantic_results + symbol_results)
+            if _snapshot_mentions_symbol(s, request.symbol_name)
+        ]
+        all_results = symbol_candidates
 
     # Keep synthesis context compact for predictable latency.
     all_results = all_results[-18:]

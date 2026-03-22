@@ -111,6 +111,8 @@ class VectorDBService:
                 "terminal_commands": json.dumps(snapshot.terminal_commands or []),
                 "summary": str(snapshot.metadata.summary if snapshot.metadata else ""),
                 "entities": ",".join(snapshot.metadata.entities) if snapshot.metadata and snapshot.metadata.entities else "",
+                "active_symbol": str((snapshot.function_context or {}).get("activeSymbol") or ""),
+                "function_signatures": json.dumps((snapshot.function_context or {}).get("signatures") or []),
             }
 
             embedding = snapshot.embedding or []
@@ -119,7 +121,9 @@ class VectorDBService:
                 embedding_source = (
                     f"{metadata.get('active_file', '')}\n"
                     f"{metadata.get('summary', '')}\n"
-                    f"{metadata.get('shadow_graph', '')}"
+                    f"{metadata.get('shadow_graph', '')}\n"
+                    f"{metadata.get('active_symbol', '')}\n"
+                    f"{metadata.get('function_signatures', '')}"
                 )
                 embedding = self._build_fallback_embedding(embedding_source, dimension)
                 logger.warning(

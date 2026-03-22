@@ -22,6 +22,7 @@ class SnapshotPayload(BaseModel):
     shadow_graph: str = Field(..., alias="shadowGraph")
     git_branch: str | None = Field(None, alias="gitBranch")
     terminal_commands: list[str] = Field(default_factory=list, alias="terminalCommands")
+    function_context: dict[str, Any] | None = Field(None, alias="functionContext")
 
     model_config = {"populate_by_name": True}
 
@@ -253,6 +254,7 @@ class StoredSnapshot(BaseModel):
     shadow_graph: str
     git_branch: str | None = None
     terminal_commands: list[str] = Field(default_factory=list)
+    function_context: dict[str, Any] | None = None
     metadata: MemoryMetadata | None = None
     embedding: list[float] | None = None
 

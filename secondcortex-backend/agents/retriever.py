@@ -110,6 +110,7 @@ class RetrieverAgent:
             shadow_graph=payload.shadow_graph,
             git_branch=payload.git_branch,
             terminal_commands=payload.terminal_commands,
+            function_context=payload.function_context,
             metadata=metadata,
         )
 
@@ -149,6 +150,8 @@ class RetrieverAgent:
             f"  File: {payload.active_file}\n"
             f"  Branch: {payload.git_branch}\n"
             f"  Language: {payload.language_id}\n"
+            f"  Active symbol: {(payload.function_context or {}).get('activeSymbol', 'none')}\n"
+            f"  Function signatures: {(payload.function_context or {}).get('signatures', [])[:12]}\n"
             f"  Terminal commands: {payload.terminal_commands}\n"
             f"  Shadow Graph (truncated): {payload.shadow_graph[:1500]}\n"
         )
