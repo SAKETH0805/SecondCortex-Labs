@@ -186,6 +186,22 @@ def _normalize_code_path(value: str | None) -> str:
     return normalized.lower()
 
 
+def _parse_iso_timestamp(value: str) -> datetime | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is not None:
+        parsed = parsed.replace(tzinfo=None)
+
+    return parsed
+
+
 def _paths_match(snapshot_path: str | None, requested_path: str | None) -> bool:
     left = _normalize_code_path(snapshot_path)
     right = _normalize_code_path(requested_path)
