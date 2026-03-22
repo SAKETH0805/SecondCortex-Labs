@@ -638,3 +638,35 @@ class UserDB:
                 "created_at": row[3],
                 "member_count": member_count,
             }
+
+    def get_most_active_team_id(self) -> str | None:
+        """Return the team_id with the most recent/highest snapshot activity."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT team_id
+                FROM synced_snapshots
+                WHERE team_id IS NOT NULL AND TRIM(team_id) != ''
+                GROUP BY team_id
+                ORDER BY COUNT(*) DESC, MAX(timestamp) DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            if row and row[0]:
+                return str(row[0])
+
+            # Fallback if snapshot rows are sparse/missing team_id values.
+            row = conn.execute(
+                """
+                SELECT team_id
+                FROM users
+                WHERE team_id IS NOT NULL AND TRIM(team_id) != ''
+                GROUP BY team_id
+                ORDER BY COUNT(*) DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            if row and row[0]:
+                return str(row[0])
+
+        return None

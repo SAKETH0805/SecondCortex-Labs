@@ -130,21 +130,38 @@ async def pm_guest_login():
     if not settings.pm_guest_enabled:
         raise HTTPException(status_code=403, detail="PM guest login is disabled.")
 
-    team_id = (settings.pm_guest_team_id or "").strip()
-    if not team_id:
-        raise HTTPException(status_code=503, detail="PM_GUEST_TEAM_ID is not configured.")
+    configured_team_id = (settings.pm_guest_team_id or "").strip()
+    candidate_team_ids: list[str] = []
+    if configured_team_id:
+        candidate_team_ids.append(configured_team_id)
 
-    team_info = user_db.get_team_info(team_id)
-    if not team_info:
-        raise HTTPException(status_code=503, detail="Configured PM guest team does not exist.")
+    inferred_team_id = user_db.get_most_active_team_id()
+    if inferred_team_id and inferred_team_id not in candidate_team_ids:
+        candidate_team_ids.append(inferred_team_id)
+
+    if not candidate_team_ids:
+        raise HTTPException(status_code=503, detail="PM guest login is unavailable: no team is configured.")
+
+    resolved_team_id: str | None = None
+    for candidate in candidate_team_ids:
+        team_info = user_db.get_team_info(candidate)
+        if not team_info:
+            continue
+        members = user_db.get_team_members(candidate)
+        if members:
+            resolved_team_id = candidate
+            break
+
+    if not resolved_team_id:
+        raise HTTPException(status_code=503, detail="PM guest login is unavailable: no active team data found.")
 
     display_name = (settings.pm_guest_display_name or "PM Guest").strip()
-    token = create_pm_guest_token(team_id=team_id, display_name=display_name)
+    token = create_pm_guest_token(team_id=resolved_team_id, display_name=display_name)
 
     return PMGuestLoginResponse(
         token=token,
         role="pm_guest",
-        team_id=team_id,
+        team_id=resolved_team_id,
         display_name=display_name,
     )
 
