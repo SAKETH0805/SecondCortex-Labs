@@ -50,6 +50,16 @@ export default function TeamMembersPanel({
     fetchMembers();
   }, [teamId, token, backendUrl]);
 
+  useEffect(() => {
+    if (members.length === 0) {
+      return;
+    }
+
+    if (!selectedMemberId || !members.some((member) => member.id === selectedMemberId)) {
+      onSelectMember(members[0].id);
+    }
+  }, [members, selectedMemberId, onSelectMember]);
+
   if (loading) {
     return <div className="p-4 text-sm">Loading members...</div>;
   }
